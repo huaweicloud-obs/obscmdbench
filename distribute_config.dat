@@ -1,0 +1,35 @@
+################master server##############################################################
+
+    # 主服务器地址，通过此服务器控制子服务器执行obsPyTool
+    # 示例：Master =  172.20.41.3
+    Master = 8.42.148.21
+
+################slaver server(s)###########################################################
+
+    # 子服务器地址
+    # 多台服务器示例：Slaves = 172.20.41.3,172.20.41.4,172.20.41.2
+    # 单台服务器示例：Slaves = 172.20.41.3
+    Slaves = 8.42.148.24,8.42.103.58
+
+
+
+    # 子服务器ssh登录用户名
+    # 如果每台子服务器用户名一致，填一个即可： Usernames = root
+    # 如果各个子服务器用户名不一致，需要提供每个服务器远程登录用户名： Usernames = root,admin
+    Usernames = root
+
+    # 子服务器ssh登录密码
+    # 如果每台子服务器密码一致，填一个即可： Passwords = pwd
+    # 如果各个子服务器密码不一致，需要提供每个服务器远程登录用户名： Passwords = pwd1,pwd2
+    Passwords = huawei@123
+
+    # 子服务器待启动的obsPyTool目录
+    # 示例： Toolpaths = /mnt/obsPyTool_1,/mnt/obsPyTool_2
+    Toolpaths = /mnt/obsPyTool_1,/mnt/obsPyTool_2
+
+    # 子服务器启动obsPyTool个数（默认为1）
+    # 可以在一台服务器上启动多个obsPyTool, 示例：ToolNumberPerServer = 2,3
+    ToolNumberPerServer = 2,2
+
+    # 分布式运行时长（单位：秒）
+    RunTime = 60

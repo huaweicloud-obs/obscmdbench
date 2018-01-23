@@ -1,0 +1,327 @@
+-- 功能说明：
+    1. 支持如下操作。
+                 100:'ListUserBuckets', 
+                 101:'CreateBucket', 
+                 102:'ListObjectsInBucket', 
+                 103:'HeadBucket', 
+                 104:'DeleteBucket', 
+                 105:'BucketDelete',
+                 106:'OPTIONSBucket',
+                 111:'PutBucketVersioning',
+                 112:'GetBucketVersioning',
+                 141:'PutBucketWebsite',
+                 142:'GetBucketWebsite',
+                 143:'DeleteBucketWebsite',
+                 151:'PutBucketCORS',
+                 152:'GetBucketCORS',
+                 153:'DeleteBucketCORS',
+                 161:'PutBucketTag',
+                 162:'GetBucketTag',
+                 163:'DeleteBucketTag',
+                 164:'PutBucketLog',
+                 165:'GetBucketLog',
+                 167:'PutBucketStorageQuota',
+                 168:'GetBucketStorageQuota',
+                 170:'PutBucketAcl',
+                 171:'GetBucketAcl',
+                 173:'PutBucketPolicy',
+                 174:'GetBucketPolicy',
+                 175:'DeleteBucketPolicy',
+                 176:'PutBucketLifecycle',
+                 177:'GetBucketLifecycle',
+                 178:'DeleteBucketLifecycle',
+                 179:'PutBucketNotification',
+                 180:'GetBucketNotification',
+                 182:'GetBucketMultiPartsUpload',
+                 185:'GetBucketLocation',
+                 188:'GetBucketStorageInfo',
+                 201:'PutObject',
+                 202:'GetObject',
+                 203:'HeadObject',
+                 204:'DeleteObject',
+                 205:'DeleteMultiObjects',
+                 206:'CopyObject',
+                 207:'RestoreObject',
+                 211:'InitMultiUpload',
+                 212:'UploadPart',
+                 213:'CopyPart',
+                 214:'CompleteMultiUpload',
+                 215:'AbortMultiUpload',
+                 216:'MultiPartsUpload',
+                 217:'GetObjectUpload',
+                 218:'PutObjectAcl',
+                 219:'GetObjectAcl',
+                 221:'OptionsObject',
+                 226:'PostObject',
+                 900:'MixOperation'（混合操作）
+
+    2.支持长短连接。
+    3.支持域名和IP两种方式请求。
+    4.支持HTTP/HTTPs两种方式配置。
+    5.支持上传下载对象时计算 MD5值。
+    6.支持上传对象时随机对象名，随机对象大小。
+    7.性能结果统计功能：包括实时统计结果：包括在线并发数，错误率，TPS，吞吐量，实时某个时间段内的性能数据。
+
+
+-- 安装&配置/INSTALL&CONFIG:
+    1. 要求python环境2.6.x或2.7.x，若要测试TSL1.1以及以上版本的HTTPS加密算法，需要>=2.7.9 
+    2. 如果要使用DNS域名请求方式，需要：
+     a) 本程序的执行机上没有运行域名缓存服务，否则造成请求均发送到同一个OSC,查询关闭nscd的方法：service nscd status|stop
+     b) 配置的域名可以正常解析。在/etc/resolv.conf内配置dns服务器。
+
+-- 运行/HOW TO RUN:
+
+    1. 创建多个测试帐户：
+      1）若配置使用POE鉴权，则用 iamPyCmd.py 对接POE批量创建测试用户 
+    ./iamPyCmd.py --help
+      2）若配置使用IAM鉴权，则需要在users.dat文件中用其它方式按如下格式构造测试帐户供工具读取。
+      accountName,accessKey,secretKey,
+
+    2. 编辑 config.dat，配置测试模型
+
+    3. 运行，可指定参数，指定的参数覆盖配置文件中的参数
+    ./run.py  [测试用例编号] [用户数] [指定加载的配置文件]
+
+    4. 查看结果，目录./result/：
+     2013.12.05_06.14.50_HeadBucket_200_brief.txt 表示200用户并发HeadBucket操作最终测试结果。     
+     2013.12.05_06.14.50_HeadBucket_200_detail.csv 表示200用户并发HeadBucket操作所有请求的详细结果。
+     archive.csv 每次执行后归档的结果。
+        ProcessId,UserName,RequestSq,Operation,Start_At,End_At,Latency(s),DataSend(Bytes),DataRecv(Bytes),Mark,RequestID,Response
+        0,zz.account.0,1,ListUserBuckets,1394000293.383760,1394000293.409535,0.025775,0,500,,D4B110AFF9760000014490D9C2E4AB2B,200 OK
+    
+     2014.03.05_06.18.13_MixOperation_2_realtime.txt表示2用户并发MixOperation操作，实时间隔5秒（可配置参数StatisticsInterval）采样周期的性能统计结果。
+     NO      StartTime           OK          Requests    ErrRate(%)  TPS       AvgLatency（S）   SendBytes        RecvBytes
+     1       03/05 06:18:13.382  279         279         0.0         55.8      0.037           173195           100000
+     2       03/05 06:18:18.382  75          75          0.0         15.0      0.13            180061           0
+     3       03/05 06:18:23.382  86          86          0.0         17.2      0.116           229280           0
+
+    
+其它说明：
+    1. 请求间有先后依赖关系。如上传对象需要之前运行过创建桶。
+    2. 工具打印日志文件log/obsPyTool.log,日志级别在logging.conf配置文件内可配置：
+        可选级别：DEBUG（所有请求的详细信息)、WARNING（>=400请求日志)、ERROR(>=500请求) 
+    3. 错误码描述：
+            'connection reset by peer': '9998',      # 连接类错误：服务器拒绝连接
+            'broken pipe': '9997',                   # 读写过程中连接管道破裂
+            'timed out': '9996',                     # 客户端等服务器端响应时间超时，时间配置参数ConnectTimeout
+            'badstatusline': '9995',                 # 客户端读HTTP响应码格式错误或读到为空，常见于服务器端断开连接
+            'connection timed out': '9994',          # 请求前连接建立超时
+            'the read operation timed out': '9993',  # 从服务器端读响应超时
+            'cannotsendrequest': '9992',             # 客户端发送请求报错
+            'keyboardinterrupt': '9991',             # 键盘Ctrl+C中断请求
+            'name or service not known': '9990',     # 服务器端域名无法解析
+            'no route to host': '9989',              # 到服务器端IP不可达，路由错误
+            'data error md5': '9901',                # 下载对象数据校验错误，也可能数据长度不正确
+            'data error content-length': '9902',     # 收到消息长度与服务器端返回的content-length头域值不一致
+            'other error': '9999'                    # 其它错误，参考工具日志堆栈定位。直接搜索堆栈关键字。
+
+--  分支说明：
+master 原始主干
+develop 分支主要是为性能测试提供分布时延而用
+hash_objectname 分支主要是为DFV性能测试提供
+distribute 分支主要是支持分布式
+obspytool 改名后的工具主要分支
+
+
+--  更新说明/UPDATES:
+2018.1.16
+1、增加时间窗口限制功能
+
+2018.1.12
+1、修改handle_from_obj_v的bug
+2、修改虚拟主机不生效的bug
+
+2018.1.8
+1、detail文件增加x-amz-id2头域信息打印
+2、log中finally result增加x-amz-id2头域信息打印
+
+2017.11.24
+1、修正205批删bug
+
+2017.11.06
+1、新增创桶，上传对象，初始化多段任务温冷头域，可随机选择
+
+2017.11.03
+1、优化分布式收集数据方式，不再统计realtime
+
+2017.10.18
+1、统计结果中加入当前工具运行目录
+
+2017.10.11
+1、分布式统计中如果realtime记录条数大于10，则不打印各slave服务器中的realtime
+2、解决因为大对象tps低导致单并发统计不到数据的问题。将刷新周期从3s变为2s
+
+2017.9.26
+1、分布式统计中增加错误率统计和带宽计算
+
+2017.9.23
+1、增加随机get对象和delete对象配置，满足性能测试需求
+
+2017.9.21
+1、优化distributed模式在一台客户端启动多个子obspytool
+
+2017.8.30
+1、修改218,219取对象方法，保持和201一致
+2、加入说明，PutBucketTag必须用ASWV4鉴权
+
+2017.8.11:
+1、obsPyTool分布式
+
+2017.8.9:
+1、新增164, 165, 167, 168, 170, 171, 173, 174, 175, 176, 177, 178, 179, 180, 182, 185, 188操作
+2、新增217, 218, 219, 221, 226操作
+3、修改upload_part，make request传入内存文件memory_file=SHARE_MEM
+
+2017.8.2:
+1、新增161,162,163 PuTBucketTag, GetBucketTag, DeleteBucketTag操作
+2、加入生成随机内容对象
+3、统计时runtime精确到毫秒
+4、加入简化收集数据开关CollectBasicData，如果为true，只收集基本数据，节约主线程cpu开销
+5、加入统计各个时延段请求数开关LatencyRequestsNumber，如果为true，会在brief文件尾部按所设置的分数统计相应时延段请求个数
+
+
+2017.6.13：
+1、新增取消段功能215 AbortMultiUpload
+
+2017.5.18:
+1、若CalHashMD5开关打开，上传对象的内容中记录请求该请求的url和开始时间戳，便于定位问题。
+
+2017.5.11:
+1、增加客户端请求流控功能，限制每并发的每秒请求数，对所有请求生效，参考配置项：TpsPerThread；
+2、优化虚拟主机方式时，在detail文件中URL字段记录桶名， 记录格式："bucket:url"；
+3、响应超时时间ConnectTimeout默认值改为180秒；
+4、去掉不再使用的配置项：MDCPolicy
+
+2017.2.15:
+1、增加RestoreObject接口
+2、CreateBucket增加StorageClass参数
+3、数据校验方式优化：若下载对象不完整，但已下载部分数据内容正确，先报9902数据长度错误
+
+2016.10.18：
+1、增加216多段上传对象操作：一次完成初始化段->上传段->合并段。
+2、iamPyCmd.py增加TLS1.1/1.2支持。
+
+2016.6.15:
+1、支持桶多版本设置，对象多版本（上传、下载、删除）。
+2、支持上传段对同一个uploadID并发上传多个段。
+3、对象名格式可配置ObjectNamePartten。
+4、支持同一个对象名上传多次，配置PutTimesForOneObj，常用于对象多版本特性测试。
+5、202下载对象，Range参数可以配置多个Range段，用';'隔开。
+6、扩展http长短连接类型，增加参数ConnectionHeader，配置发送头域connection: close或keep-alive。
+7、增加参数PrintProgress支持是否打印过程进度到屏幕，配置关闭方便自动化调用obsPyTool。
+
+2016.04.13:
+1、支持https TLS协议版本可通过sslVersion配置。
+2、支持运行时长可通过RunSeconds配置。
+3、支持混合操作(900)读本地detail文件中的对象名。
+4、第一次增加checkData.py工具用于校验AZ间数据一致性。
+5、修改上传对象返回307重定向bug
+6、修改拷贝对象接口源和目标均使用服务器端加密时bug
+7、修改虚拟主机V4签名计算错误bug
+8、优化拷贝对象和拷贝段操作，判断服务器端返回了200 OK但未正常返回Etag，则认为请求失败，置结果为500 InternalError
+9、优化requestID获取方式，提前到返回了header就获取。
+
+2016.02.17: 
+1、支持HTTPs STL1.2协议请求，要求python版本>=2.7.9，参考文档'TLS1.2_Support.txt'处理。
+2、增加对象MD5校验功能（CalHashMD5配置开关，默认关闭，打开对性能测试影响大）
+    1)上传时写对象数据MD5值到对象最后32个字节，下载时自动计算内容比对，出错时报9901错误码。
+    2)建议非性能测试都打开该功能。
+3、增加读写随机CHUNK大小功能（CalHashMD5配置开关，默认固定为65536，打开对性能测试影响大）
+4、将原来9999错误码细分到更多错误码，见错误码描述。
+5、服务器端加密拷贝段接口支持源段加密。
+6、更改AWSV4鉴权在虚拟主机配置打开时签名计算错误的bug。
+7、配置文件config.dat有变更。
+
+2016/02/05:
+1、修改批量对象删除接口未能删除所有对象bug。
+2、修改虚拟主机下V2鉴权列举用户所有桶操作造成签名计算错误的bug。
+3、优化长连接管理：按HTTP RFC2016协议规范，检测响应中包含Connection:close头域时关闭连接，下一次请求重新建立连接。
+4、配置文件config.dat未变更。
+
+2016/01/27:
+1、补充AWSV4鉴权，可配置使用V4或V2(默认)。
+2、当配置使用服务器端加密时，工具忽略配置，使用V4，且使用https请求。
+3、修改 多并发写obsPyTool.log日志造成的日志滚动时 屏幕打印错误信息bug。
+    
+2016/01/20:
+1、支持服务器端加密特性。 来源：UDS 赵鹏君
+2、修改detail、realtime结果文件通过logging方式记录。 来源：内部优化
+3、修改每个用户多并发时桶相关操作bug。               来源：9000 王宏宝
+4、修改若307响应Location字段中有端口号会造成url解析错误的bug。来源：UDS 杨春霞
+
+2015/11/12:
+1、增加3xx重定向处理。 来源：UDS 杨春霞
+2、上传对象默认配置改不重试。 来源：内部优化
+
+2015/11/06:
+1、修改单用户多并发引入的多段上传bug。 来源：UDS 杨春霞
+
+2015/09/21:
+1、多次执行结果按excel格式归档到archive.csv。 来源：UDS 杨春霞
+2、少量类型的错误请求无法从Header获取requestID，改从body中获取。来源：内部优化
+
+2015/08/24:
+1、多并发下载同一个对象
+2、region下载
+3、复制对象
+4、复制段
+5、设置、查询、删除桶CORS
+6、廊坊、深圳等用户较少情况下的，大并发业务性能，避免单桶冲突的场景  
+7、同时多并发进行单桶操作的场景也要保留）
+
+2015/07/01:
+1、优化python 2.6 httplib库不支持response头域读取缓存的问题,优化小对象下载测试能力。
+
+2015/03/25:
+1、增加下载对象测试从之前上传对象生成的detail结果中读取。
+2、增加上传对象时重试功能。
+
+2014/06/26:
+1、优化tps>6000时，实时统计结果的准确度。
+2、日志文件过大，清除日志文件。
+
+2014/06/06:
+1、修改循环次数过大造成程序崩溃bug
+
+2014/04/24:
+1、添加批量删除对象功能。
+2、添加多段上传对象功能。
+3、添加运行时指定默认参数： ./run.py 用例编号  并发数  加载的配置文件
+4、添加错误码个数统计功能。
+
+2014/03/29:
+1、添加HTTP连接超时时间配置功能。
+2、添加指定测试用户开始索引。
+3、修改统计“SendThroughput*”，RecvThroughput*，DataSend，DataRecv　Bug.
+
+2014/03/26:
+1、添加创建指定Location功能。
+
+2014/03/05:
+1、添加website支持。
+2、添加某个时间段的性能结果统计
+3、添加配置，性能统计结果是否包括错误响应的请求。
+4、修改Ctr+C ”安全退出”功能，不打印错误日志。
+
+2013/12/04:
+1、添加因“内外部流控“导致的请求错误结果统计。
+2、添加运行过程中Ctr+C ”安全退出”功能。
+
+2013/10/31:
+1.、添加未知错误请求捕捉和统计。所有未收到响应的消息均为未知错误。包括网络故障，超时未响应等。
+2.、添加字体颜色。
+
+2013/09/01:
+1、添加一键清理所有用户数据的功能。
+
+2013/07/10:
+1、支持如下接口的测试。
+    # 100 = ListUserBuckets
+    # 101 = CreateBucket
+    # 102 = ListObjectsInBucket
+    # 103 = DeleteBucket
+    # 104 = HeadBucket
+    # 201 = PutObject
+    # 202 = GetObject
+    # 203 = HeadObject
+    # 204 = DeleteObject

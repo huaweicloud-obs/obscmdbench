@@ -1,0 +1,456 @@
+#################test environment##################################################################
+
+    # [OSCs]OSC的IP地址。若配置项 [UseDomainName]为True，此项忽略。
+    # 示例：OSCs =  172.20.41.3,172.20.41.4,172.20.41.2
+    # 长连接，系统轮询OSC建立连接。配置使用短连接，每次请求随机选择 OSC请求。
+    OSCs = 127.0.0.1
+
+###################test case plan##################################################################
+
+    # 配置测试用例，用例对应操作见下。
+    Testcase = 900
+    
+    # 用户数，1个用户对应users.dat中的一行用户信息
+    Users = 10
+    # 从user.dat中加载用户的起始行号,从0开始，空行跳过不计入。
+    UserStartIndex = 0
+    
+    # 每个用户对应的的并发数，默认为1，表示1个用户对应1个并发。1个并发表示1个线程.
+    # 若配置项 [LongConnection]为True, 一个反复使用1个HTTP/HTTPs连接。
+    ThreadsPerUser = 1
+    
+    
+    # Testcase参照
+        # 100 = ListUserBuckets
+        # 101 = CreateBucket
+        # 102 = ListObjectsInBucket
+        # 103 = HeadBucket
+        # 104 = DeleteBucket
+        # 105 = BucketDelete
+        # 106 = OPTIONSBucket
+        # 111 = PutBucketVersioning
+        # 112 = GetBucketVersioning
+        # 141 = PutBucketWebsite
+        # 142 = GetBucketWebsite
+        # 143 = DeleteBucketWebsite
+        # 151 = PutBucketCORS
+        # 152 = GetBucketCORS
+        # 153 = DeleteBucketCORS
+        # 161 = PutBucketTag
+        # 162 = GetBucketTag
+        # 163 = DeleteBucketTag
+        # 164 = PutBucketLog    #需先执行PutBucketAcl授权
+        # 165 = GetBucketLog
+        # 167 = PutBucketStorageQuota
+        # 168 = GetBucketStorageQuota
+        # 170 = PutBucketAcl
+        # 171 = GetBucketAcl
+        # 173 = PutBucketPolicy
+        # 174 = GetBucketPolicy
+        # 175 = DeleteBucketPolicy
+        # 176 = PutBucketLifecycle
+        # 177 = GetBucketLifecycle
+        # 178 = DeleteBucketLifecycle
+        # 179 = PutBucketNotification
+        # 180 = GetBucketNotification
+        # 182 = GetBucketMultiPartsUpload
+        # 185 = GetBucketLocation
+        # 188 = GetBucketStorageInfo
+        # 201 = PutObject
+        # 202 = GetObject
+        # 203 = HeadObject
+        # 204 = DeleteObject
+        # 205 = DeleteMultiObjects
+        # 206 = CopyObject
+        # 207 = RestoreObject #取回冷对象
+        # 211 = InitMultiUpload
+        # 212 = UploadPart
+        # 213 = CopyPart
+        # 214 = CompleteMultiUpload
+        # 215 = AbortMultiUpload
+        # 216 = MultiPartsUpload    #每个并发顺序完成每个对象多段初始化->上传段->合并段，同900 MixOperation=211,212,213的区别：900初始化所有对象段后再上传段。
+        # 217 = GetObjectUpload    #需先执行InitMultiUpload
+        # 218 = PutObjectAcl
+        # 219 = GetObjectAcl
+        # 221 = OptionsObject
+        # 226 = PostObject
+        # 900 = MixOperation
+
+#############   "100=ListUserBuckets"   #############################################################
+
+    # 每个并发的请求次数，仅对100=ListUserBuckets操作有效。
+    RequestsPerThread = 2000
+
+
+#############   "101=CreateBucket"    ###############################################################
+
+    # 每个用户要创建的桶数：>=0，超过100，系统会返回409错误。为避免混合业务冲突，每个用户的每个并发都会创建一次所有桶。
+    BucketsPerUser = 10
+    # 创建时指定桶Location, 不能包含空格，空代表不指定。
+    BucketLocation = 
+    # 创建桶指定ACL，可选：
+    # private | public-read |public-read-write | authenticated-read |
+    # bucket-owner-read | bucket-owner-full-control, 空不携带
+    # 若指定非空,则在创建桶请求中携带头域 x-amz-acl:对应acl
+    CreateWithACL = public-read-write
+    # 桶名中自定义标识，系统自动 生成桶名格式：
+    # 用户ak小写 +'.' + bucketNamePrefix + '.' + index, index 从0到BucketsPerUser-1
+    BucketNamePrefix = bucket.test
+    # 创桶指定x-default-storage-class, 可选：STANDARD、STANDARD_IA和GLACIER, 也可以STANDARD,STANDARD_IA,GLACIER多选, 系统将从中随机选取类型
+    StorageClass =
+
+#############   "102=ListObjectsInBucket"   #########################################################
+
+    # 一次请求的对象数，对应接口中的max-keys参数，1~1000有效， 也可配置多于1000，但系统最多返回1000
+    Max-keys = 1000
+    # 列举不带多版本。
+
+#############   "103=HeadBucket"    ###############################################################
+
+    # Head 101=CreateBucket创建的所有桶。
+    
+#############   "104=DeleteBucket"    ##############################################################
+
+    # 删除101=CreateBucket配置中创建的所有桶。
+    
+#############   "105=DeleteBucket"    ##############################################################
+
+    # 强制删除101=CreateBucket配置中创建的所有桶。
+    
+#############   "106=OPTIONSBucket"    ##############################################################
+
+    # OPTIONS 101=CreateBucket配置中创建的所有桶。    
+    # 要处理OPTIONS，OBS的桶必须已经配置CORS
+
+
+#############   "111=PutBucketVersioning"    ##############################################################
+
+    # PutBucketVersioning 101=CreateBucket配置中创建的所有桶。
+    # 桶多版本状态，可选值Enabled | Suspended
+    VersionStatus = Enabled
+
+
+#############   "112=GetBucketVersioning"    ##############################################################
+
+    # GetBucketVersioning 101=CreateBucket配置中创建的所有桶。
+
+#############   "141=PutBucketWebsite"  ###########################################################
+
+    RedirectHostName = example.com
+    
+#############   "142=GetBucketWebsite"    ##########################################################
+
+#############   "143=DeleteBucketWebsite"    #######################################################
+
+#############   "151=PutBucketCORS"    #########################################################
+
+    #AllowedMethod有效值GET、PUT、HEAD、POST 、DELETE可带多个方法
+    #为了保障方法一致，OPTIONSBucket和OptionsObject中也是取得这个参数
+    AllowedMethod = GET
+
+#############   "152=GetBucketCORS"    #########################################################
+
+#############   "153=DeleteBucketCORS"    #######################################################
+
+#############   "161=PutBucketTag"    #########################################################
+
+    #鉴权方法必须为ASWV4 ,即AuthAlgorithm = AWSV4
+    #配置key-value对数，默认1，最大10
+    KeyValueNumber = 10
+
+#############   "162=GetBucketTag"    #########################################################
+
+#############   "163=DeleteBucketTag"    #######################################################
+
+#############   "179=PutBucketNotification"    ###################################################
+
+    #需修改/opt/dfv/obs_service_layer/objectwebservice/osc/conf/obs_sod.properties  smn_connection = true
+
+#############    "201=PutObject" ##################################################################
+
+    # 每个并发向自身的BucketsPerUser个桶中上传对象。
+    #[ObjectSize]上传的对象大小（字节）
+    # 示例： ObjectSize = 4096 上传指定大小对象。4096=4K, 104857600=100MB, 65536=64K
+    # 示例：ObjectSize = 0~1024 上传随机大小对象。 0 ~ 1024  bytes 
+    # 示例：ObjectSize = 0,1024,2048  随机上传大小为0,1024或2048大小的对象。
+    ObjectSize = 4096~104857600
+    #ObjectSize = 10485760
+    
+
+    #每个并发在每个桶中上传的对象数
+    ObjectsPerBucketPerThread = 1000
+    # 每个对象名上传次数，多次上传覆盖。多用于多版本或对象覆盖测试。
+    PutTimesForOneObj = 1
+    
+    #上传对象同时指定ACL,可选：private | public-read |public-read-write | authenticated-read 
+    # bucket-owner-read | bucket-owner-full-control, 空不携带
+    PutWithACL = public-read
+
+    #对象是否字典序，若为false，系统则随机生成对象名，长度15~1024字节。
+    #若对象名非字典序，则无法进行乱序下的下载和删除测试。
+    ObjectLexical = true
+
+    #若配置ObjectLexical为true, 对象名格式参考配置项 ObjectNamePartten
+    ObjectNamePrefix = object.test
+
+    #对象名partten, 字典序时有效，一般不修改。若修改需保证对上传对象的其它操作使用相同的配置。
+    #保证processID，ObjectNamePrefix，Index 3个字符串存在，字段顺序和之间连接字符(串）可定义。
+    #Index： 从0~ObjectsPerBucketPerThread-1
+    #processID：并发号，从0开始
+    ObjectNamePartten = processID-ObjectNamePrefix-Index
+    #若桶已开启多版本，则上传对象后把获取到的对象版本信息写在data/objv-{0...}.dat下。供下载和删除使用。
+
+    # 创建对象指定x-default-storage-class, 可选：STANDARD、STANDARD_IA和GLACIER, 也可以STANDARD,STANDARD_IA,GLACIER多选, 系统将从中随机选取类型
+    ObjectStorageClass =
+
+
+#############   "202=GetObject"    ################################################################
+    # 按以下顺序查找对象处理：
+    # 1) 查看是否指定了上传时生成的detail文件。（上传时对象名可非字典序）如objectDesFile=result/abc.csv
+    objectDesFile = 
+
+    # 2) 查看是否有任一个并发对应的data/objv-{0...}.dat文件。若桶开启多版本，上传对象会自动生成该文件。
+    #  文件记录了对象多版本信息，从该文件内读取按指定版本下载。
+
+
+    # 3) 按工具命名规则下载对象，下载201=PutObject中上传的所有对象，上传的对象名要求字典序。
+
+    #指定Range下载对象，空表示不指定。格式参考http 1.1协议Range定义,如可选合法值：
+    # 0-9          #请求对象内容的从第0到第9个字节。
+    # 9-           #请求对象内容的从第9个及以后的字节。
+    # -200         #请求对象内容的最后200个字节。
+    # 0-1,5-       #请求对象肉容的多个range段.
+    # 多个range用分号;隔开。如0-1;3-5;6-10(可以重叠），工具每次请求随机选择。
+    Range =
+
+    # 是否随机获取开关
+    # 随机获取无需遍历所有201=PutObject中上传对象，该配置属于性能测试需求，对于对象数过大的场景，建议关闭
+    IsRandomGet = false
+
+#############   "203=HeadObject"    #################################################################
+
+    #若201指定objectDesFile，则从文件获取对象名。
+    
+    #否则，Head 201=PutObject中上传的所有对象。
+ 
+
+#############    "204=DeleteObject" ################################################################
+    # 按以下顺序查找对象处理：
+    # 若201指定objectDesFile，则从文件获取对象名。
+    # 若data/objv-{0...}.dat下存在对象多版本记录，则从该文件内读取按指定版本删除。
+    # 删除 201=PutObject中上传的所有对象。
+
+    # 是否随机删除
+    # 随机删除，该配置属于性能测试需求，对于对象数过大的场景，建议关闭
+    IsRandomDelete = false
+
+#############    "205=DeleteMultiObjects"    #######################################################
+
+    #一次请求删除的对象数，1~100个，否则服务器返回400错误。
+    #请确保每个桶每个并发已有对象数（ObjectsPerBucketPerThread）为DeleteCountPerRequest的整数倍。
+    #若非整数倍，程序对每个桶默认进行(ObjectsPerBucketPerThread/DeleteCountPerRequest) +1 次批删请求。
+    DeleteObjectsPerRequest = 3
+
+#############    "206=CopyObject"    ##############################################################
+
+    # copySrcObjFixed copyDstObjFiexed BucketNameFixed  结果
+    #    未指定        未指定            未指定       在源桶内将对象拷贝一份。新对象名对源对象名只是ObjectNamePrefix后加.copy
+    #    未指定        未指定            指定         源对象：遍历所有桶所有对象；目标桶：BucketNameFixed，新对象名对源对象名只是ObjectNamePrefix后加.copy
+    #    未指定        指定              *            遍历所有桶所有对象，全部拷贝到BucketNameFixed桶，新对象名对源对象名只是ObjectNamePrefix后加.copy
+    #    指定          指定              *           源对象：copySrcObjFixed，目标对象：copyDstObjFiexed（BucketNameFixed忽略）
+    #    指定          未指定            未指定       源对象：copySrcObjFixed，目标对象：配置的用户所有桶内复制对象，新对象名对源对象名只是ObjectNamePrefix后加.copy
+    #    指定          未指定            指定         源对象：copySrcObjFixed，目标对象：BucketNameFixed桶，新对象名对源对象名只是ObjectNamePrefix后加.copy
+
+    # 若指定copySrcObjFixed，要求对象名存在，且所有用户对该对象有读权限。不指定请保留为空。
+    copySrcObjFixed = 
+    # 若指定copyDstObjFiexed，要求目标桶要存在，所有用户对该桶有写权限。不指定请保留为空。
+    copyDstObjFiexed = 
+    # 源对象服务器端加密算法。可选值：SSE-C | 空,不区分大小写。
+    copySrcSrvSideEncryptType = SSE-C
+
+#############    "207=RestoreObject"    ##############################################################
+
+    RestoreDays =
+    RestoreTier =
+
+
+#############    "211=InitMultiUpload"    ########################################################
+
+    # 程序为每一个桶中的每一个对象初始化一个多段上传任务
+    # 记录到本地文件data/upload_id-并发号.dat,格式：用户名\t桶名\t对象名\tuploadID\n
+    # 共生成BucketsPerUser*ObjectsPerBucketPerThread个多段任务
+
+    # 初始化多段任务指定x-default-storage-class, 可选：STANDARD、STANDARD_IA和GLACIER, 也可以STANDARD,STANDARD_IA,GLACIER多选, 系统将从中随机选取类型
+    MultiUploadStorageClass =
+
+#############    "212=UploadPart"    ############################################################
+
+    # 为data/upload_id-并发号.dat中的每一个uploadID上传PartsForEachUploadID个大小的段。
+    # 记录到本地文件data/parts_etag-并发号.dat，格式：桶名	对象名	uploadID	partNo:Etag,partNo:Etag,...\n
+    # 每个uploadID要上传的段数量[1~10000]。若ConcurrentUpParts配置打开，需要配置为ThreadsPerUser的整数倍,否则工具自动修改该值。
+    PartsForEachUploadID = 3
+
+    # 针对每个uploadID是否并发上传段。在900中混合执行211,212,213时请保持关闭。
+    # 若开关打开，需要配置满足关系:PartsForEachUploadID = x * ThreadsPerUser(x为>=1整数)。若不满足工具自动调整PartsForEachUploadID为最接近的值。
+    # 单个uploadID的并发数工具默认取 ThreadsPerUser
+    ConcurrentUpParts = false
+
+    # [PartSize] 上传的段大小,obs协议要求最小5M
+    # 示例： PartSize = 5242880 上传指定大小段。5242880=5M, 104857600=100MB
+    # 示例：PartSize = 5242880~10485760 范围内随机
+    # 示例：PartSize = 5242880,10485760  可选值随机
+    PartSize = 5242880
+    
+#############    "213=CopyPart"    ############################################################
+
+    # 程序为uploadID.dat中的每一个uploadID拷贝PartsForEachUploadID个大小的段。
+    # 配置参数PartsForEachUploadID，PartSize与212=UploadPart相同。
+    # 服务器端加密功能使用参数配置同拷贝对象。
+    # 源段的对象名必须从202中objectDesFile指定的文件读取，随机从里面选文件拷贝。需保证源对象存在，请求者有读权限，且大小不小于目标段。
+
+#############    "214=CompleteMultiUpload"    ################################################
+
+    # 为每个段任务合并段。合并的段列表从partsEtag.dat读取。
+
+#############    "215=AbortMultiUpload"    ################################################
+
+    # 取消段任务，因为只能取消自已初始化的段任务，需要保证与初始化段用例相同的用户及并发配置。
+    # 要取消的段任务列表从初始化段任务时写入的本地文件本地文件data/upload_id-并发号.dat获取。
+
+#############    "216=MultiPartsUpload"    ################################################
+
+    # 每个并发顺序完成对象多段初始化->上传段->合并段
+
+#############    "900=MixOperation"     ########################################################
+
+    # 设置混合操作类型，可设置以上除900外的所有操作。
+    # 操作顺序之间有依赖，比如下载对象依赖于上传对象。
+    # 操作模型是：每个用户独立运行，先后进行如下循环操作，循环次数mixLoopCount
+    # 为保证每一时刻系统内有各种业务混合在操作，可配置每种操作的次数，并适当加大循环次数和并发用户数。
+    MixOperations = 100,101,104,201,102,202,203,204,103
+    # 循环次数
+    MixLoopCount = 10
+
+######    Advanced Configuration    ############################################################
+
+    # 固定的桶名，默认为空。若配置，所有并发的所有操作均对该桶名进行。
+    # 示例： BucketNameFixed = fixedbucket-01
+    BucketNameFixed =
+
+    # 固定的对象名，默认为空。若配置，所有并发的所有操作均对该对象名操作。原操作的次数不影响。
+    # 示例：ObjectNameFixed = fixedObject-01
+    ObjectNameFixed =
+
+    # 鉴权签名算法,可选AWSV2 | AWSV4 | 空
+    # 若开启服务端加密功能，工具默认使用AWSV4算法。
+    # 保持为空： 按请求随机,每一次请求时随机选用算法。
+    AuthAlgorithm = AWSV2
+    # 请求所在Region名称，当使用AWSV4算法且环境配置为多Region模式时必选。
+    Region = 
+    
+    # 是否使用域名。如使用域名，系统会从域名获取OSC。
+    UseDomainName = false
+    # 是否使用虚拟主机方式请求，若使用虚拟主机方式，需要保证域名配置正确。
+    VirtualHost = false
+    # 域名地址
+    DomainName = obs.huawei.com
+
+    # 使用HTTP还是HTTPs请求。
+    IsHTTPs = false
+    
+    # ssl协议版本号配置，当IsHTTPs为True时生效。
+    # 可选值包括：TLSv1, TLSv1_1, TLSv1_2,SSLv23, SSLv2, SSLv3 (不配置默认为SSLv23)
+    # 若python 版本 <  2.7.9，不支持TLSv1_1, TLSv1_2。
+    # TLSv1 : 选择TLS v1.0协议。
+    # TLSv1_1 : 需要openssl version 1.0.1+,  python >2.7.9
+    # TLSv1_2 : 当前最安全协议。需要openssl version 1.0.1+,python >2.7.9
+    # SSLv23: 自动协商最安全协议。
+    # SSLv2 : 若openssl编译时带了OPENSSL_NO_SSL2 参数不可用。该协议不安全，已不建议使用。
+    # SSLv3 : 若openssl编译时带了OPENSSL_NO_SSL3 参数不可用。该协议不安全，已不建议使用。
+    
+    sslVersion = 
+    
+    # 服务器端数据加密方法,若不启用，保持为空。可选值：SSE-KMS|SSE-C,不区分大小写。
+    # 若配置SSE-C,x-amz-server-side-encryption-customer-key使用对象名的最后32个字符，不足32前面补0。
+    SrvSideEncryptType = 
+    # 指定服务端加密算法,仅当SrvSideEncryptType为SSE-KMS时有效。可选：aws:kms, AES256。
+    SrvSideEncryptAlgorithm = aws:kms
+    # 指定KMS master encryption key ID,仅当SrvSideEncryptType为SSE-KMS, SrvSideEncryptAlgorithm为aws:kms时有效。若不指定，服务端使用默认ID。
+    SrvSideEncryptAWSKMSKeyId = 
+    # 指定服务端器加密context，非必选。
+    SrvSideEncryptContext =  
+
+    # 是否复用连接。若配置True，每个用户初始化一个连接，用户退出才释放连接，每次请求复用连接。
+    # 若配置使用短连接，每次请求前临时创建连接。
+    LongConnection = true
+
+    # 客户端发送的http header connection值, 可选：keep-alive | close, 保持空时，工具自动根据LongConnection自动添加。
+    ConnectionHeader =
+
+    # 连接建立/请求等待超时时间。
+    ConnectTimeout = 180
+
+    #上传下载是否计算MD5，若为True,在对象上传下载时计算校验MD5并记录在result/******_detail.csv中，若数据校验失败工具报错误码9901。
+    CalHashMD5 = false
+
+    # 统计结果时间段(单位：ms)，系统根据这个时间段，给出每个时间段的请求占百分比
+    # 最好不要超过5个值。#系统会根据这个值给出类似统计结果：
+    # <=500(90.3%), <=1000(94.9%), <=3000(98.0%), <=10000(100.0%), >10000(0.0%)
+    LatencySections = 500,1000,3000,10000
+    
+    # 是否记录每个请求的详细结果到detail文件,true|false,关闭该功能不影响性能结果统计。
+    RecordDetails = true
+    
+    # 性能统计时间间隔(单位:s)，0代表关闭。　一般设置为多倍的请求的平均响应时间。
+    StatisticsInterval = 3
+
+    # 性能统计结果是否包含错误请求,影响统计结果项：avgLatency, tps, sendBPS, recvBPS
+    BadRequestCounted = false
+    
+    # 是否避免多并发对同一个桶进行上传、删除对象操作
+    AvoidSinBkOp = true
+    
+    # 运行时长（秒）
+    # 运行指定时长后退出。若未到指定时长时，配置的请求数完成，工具也会退出。配置为0表示不配置，即按配置的请求数完成后退出。
+    RunSeconds =
+
+    # 限制每并发每秒的最大请求数，可为整数或浮点数，空和0表示不限制。
+    # 常用于响应时延较小的请求。
+    TpsPerThread =
+
+    # 限制每并发运行的周期窗口时间，若其中一项为0或为空则不生效
+    RunWindowSeconds =
+    StopWindowSeconds =
+
+    # 是否打印运行中的实时结果和进度。自动化调用工具时关闭。
+    PrintProgress = True
+
+    # 性能统计结果是否包含各个请求的时延，true|false，关闭该功能不影响性能结果统计
+    LatencyPercentileMap = true
+
+    # 和LatencyPercentileMap联合使用，如果LatencyPercentileMap为true，根据情况可选定需要观察的时延变化的点。
+    # 目前需求是10%, 50%, 90%, 95%, 99%五个点。
+    # 举例说明：若1并发，每并发100请求数上传对象，那最后上传100对象。系统将每个请求的时延记录到列表中，最后排序，根据默认需求取上述五个点
+    # 得到的即是排序后的第10个时延，第50个时延，90个，95个，99个。
+    # 系统会根据这个值给出类似统计结果xx(10%),xx(50%),xx(90%),xx(95%),xx(99%)
+    LatencyPercentileMapSections = 10,50,90,95,99
+
+    # 性能统计结果是否包含各个时延段请求数，true|false
+    LatencyRequestsNumber = false
+
+    # 最大时延和最小时延的差值取10份
+    LatencyRequestsNumberSections = 20
+
+    # 是否将ObjectNamePattern通过ProcessID-ObjectNamePrefix-Index产生HashId，产生后的 ObjectNamePattern = HashId-ProcessID-ObjectNamePrefix-Index
+    ObjNamePatternHash = true
+
+    # 是否只需要打印基本数据，为减少主线程cpu占用
+    CollectBasicData = false
+
+    # 运行obsPyTool工具的模式（默认为1）
+    # Mode = 1: 集成式（像过去一样运行）
+    # Mode = 2: 分布式（需要配置distribute_config.dat文件）
+    # 如果是主控服务器，IsMaster = true
+    # 如果是子服务器，IsMaster = false
+    Mode = 1
+    IsMaster = false

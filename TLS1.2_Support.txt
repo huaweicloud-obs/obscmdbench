@@ -1,0 +1,71 @@
+1、如何判断执行机是否支持HTTPs STL1.2 ?
+    1) 检查Python 版本，必须>= 2.7.9且<3.0。否则参考'2、如何安装升级Python版本？'。
+     :# /usr/bin/python --version
+     Python 2.7.11
+    2）Python 版本中有ssl模块，若没有,参考 '2、如何安装升级Python版本？'安装openssl库，并重新编译升级/安装python版本。
+     :# /usr/bin/python 
+     Python 2.7.11 (default, Feb 22 2016, 15:48:18) 
+     [GCC 4.3.4 [gcc-4_3-branch revision 152973]] on linux2
+     Type "help", "copyright", "credits" or "license" for more information.
+     >>> import ssl
+     >>>  （没有提示ssl包不存在错误）
+
+2、如何安装升级Python版本 ?
+    1)前置条件
+        a）环境已安装gcc，若未安装，需要用OS的镜像文件安装。
+            :# gcc -v
+            Using built-in specs.
+            Target: x86_64-suse-linux
+            Configured with: ../configure --prefix=/usr --infodir=/usr/share/info --mandir=/usr/share/man --libdir=/usr/lib64 --libexecdir=/usr/lib64 --enable-languages=c,c++,objc,fortran,obj-c++,java,ada --enable-checking=release --with-gxx-include-dir=/usr/include/c++/4.3 --enable-ssp --disable-libssp --with-bugurl=http://bugs.opensuse.org/ --with-pkgversion='SUSE Linux' --disable-libgcj --disable-libmudflap --with-slibdir=/lib64 --with-system-zlib --enable-__cxa_atexit --enable-libstdcxx-allocator=new --disable-libstdcxx-pch --enable-version-specific-runtime-libs --program-suffix=-4.3 --enable-linux-futex --without-system-libunwind --with-cpu=generic --build=x86_64-suse-linux
+            Thread model: posix
+            gcc version 4.3.4 [gcc-4_3-branch revision 152973] (SUSE Linux) 
+        b) 若环境已安装openssl-devel 包
+            :/Python-2.7.11 # rpm -qa openssl-devel
+            :/Python-2.7.11 # 
+            上面显示没有安装该包。
+            
+    2)安装/升级openssl
+        a)解压openssl-1.0.2f.tar.gz，进入目录
+        b） ./config -fPIC
+        c） make
+        d）make install
+        e）创建软链接
+            :/openssl-1.0.2f # rm /usr/bin/openssl 
+            :/openssl-1.0.2f # ln -s /usr/local/ssl/bin/openssl /usr/bin/openssl
+            :/openssl-1.0.2f # ll /usr/bin/openssl
+            lrwxrwxrwx 1 root root 26 Feb 22 15:45 /usr/bin/openssl -> /usr/local/ssl/bin/openssl
+            :/openssl-1.0.2f # 
+        f)测试安装是否成功：
+            :/openssl-1.0.2f # which openssl
+            /usr/bin/openssl
+            :/openssl-1.0.2f # openssl version
+            OpenSSL 1.0.2f  28 Jan 2016
+
+    3)安装升级Python到2.7.9
+        a) 解压Python-2.7.11.tgz，进入目录
+        b） ./configure --with-pydebug
+        c） make
+            保证命令执行完如下2类打印中没有_ssl  module错误。
+            Python build finished, but the necessary bits to build these modules were not found:
+            _bsddb             _sqlite3           _tkinter        
+            bsddb185           bz2                dl              
+            imageop            readline           sunaudiodev     
+            zlib                                                  
+            To find the necessary bits, look in setup.py in detect_modules() for the module's name.
+
+            Failed to build these modules:
+            _curses_panel                                         
+
+        d） make install
+        e）创建软连接
+            mv /usr/bin/python /usr/bin/python.bak
+            ln -s /usr/local/bin/python2.7 /usr/bin/python
+        f)测试Python是否更新成功，且支持ssl加密模块
+            :/Python-2.7.11 # ll /usr/bin//python
+            lrwxrwxrwx 1 root root 24 Feb 22 15:59 /usr/bin//python -> /usr/local/bin/python2.7
+            :/Python-2.7.11 # /usr/bin/python
+            Python 2.7.11 (default, Feb 22 2016, 15:48:18) 
+            [GCC 4.3.4 [gcc-4_3-branch revision 152973]] on linux2
+            Type "help", "copyright", "credits" or "license" for more information.
+            >>> import ssl  
+            >>> （没有提示ssl包不存在错误）
