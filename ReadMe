@@ -1,5 +1,11 @@
 -- 功能说明：
-    1. 支持如下操作。
+   本工具主要为进行对象存储系统的性能测试功能机，能够自动产生定义的测试数据大小进行对象上传 下载，在性能和执行效率上俱佳。
+   自定义配置并发数和上传对象数，自定义测试业务接口，当前支持绝大多数 对象接口操作，
+   工具适配华为云 对象存储服务接口， 若对接其他对象接口，做适度接口头域修改就可适配。
+   是业内进行性能测试验证的最佳工具
+   
+   
+   1. 支持如下操作。
                  100:'ListUserBuckets', 
                  101:'CreateBucket', 
                  102:'ListObjectsInBucket', 
@@ -71,11 +77,12 @@
 
 -- 运行/HOW TO RUN:
 
-    1. 创建多个测试帐户：
-      1）若配置使用POE鉴权，则用 iamPyCmd.py 对接POE批量创建测试用户 
-    ./iamPyCmd.py --help
-      2）若配置使用IAM鉴权，则需要在users.dat文件中用其它方式按如下格式构造测试帐户供工具读取。
+    1. 创建测试帐户：
+       配置使用AK SK鉴权，则需要在users.dat文件中按如下格式构造测试帐户供工具读取。（1个或多个，根据需要配置）
       accountName,accessKey,secretKey,
+      accountName1,accessKey1,secretKey1,
+      accountName2,accessKey2,secretKey2,
+      ...
 
     2. 编辑 config.dat，配置测试模型
 
@@ -115,12 +122,7 @@
             'data error content-length': '9902',     # 收到消息长度与服务器端返回的content-length头域值不一致
             'other error': '9999'                    # 其它错误，参考工具日志堆栈定位。直接搜索堆栈关键字。
 
---  分支说明：
-master 原始主干
-develop 分支主要是为性能测试提供分布时延而用
-hash_objectname 分支主要是为DFV性能测试提供
-distribute 分支主要是支持分布式
-obspytool 改名后的工具主要分支
+
 
 
 --  更新说明/UPDATES:
@@ -131,9 +133,6 @@ obspytool 改名后的工具主要分支
 1、修改handle_from_obj_v的bug
 2、修改虚拟主机不生效的bug
 
-2018.1.8
-1、detail文件增加x-amz-id2头域信息打印
-2、log中finally result增加x-amz-id2头域信息打印
 
 2017.11.24
 1、修正205批删bug
