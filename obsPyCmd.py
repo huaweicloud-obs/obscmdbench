@@ -34,8 +34,9 @@ else:
 # 根据序号初始化一个标准的HTTP连接
 class MyHTTPConnection:
     def __init__(self, host, is_secure=False, ssl_version=None, timeout=80, serial_no=0, long_connection=False,
-                 conn_header=''):
+                 conn_header='', anonymous=False):
         self.isSecure = is_secure
+        self.anonymous = anonymous
         if self.isSecure:
             self.sslVersion = ssl.__dict__['PROTOCOL_' + ssl_version]
         self.timeout = timeout
@@ -209,20 +210,22 @@ class OBSRequestHandler:
         self.obsRequest.generate_url()
         self.obsRequest.add_content_length_header()
         self.obsRequest.add_host_header()
-        try:
-            # handle auth
-            if self.obsRequest.AuthAlgorithm.lower() == 'awsv2':
-                AuthorizationHandler.HmacAuthV2Handler(self.obsRequest).handle()
-            elif self.obsRequest.AuthAlgorithm.lower() == 'awsv4':
-                AuthorizationHandler.HmacAuthV4Handler(self.obsRequest).handle()
-            elif random.randint(0, 1):
-                AuthorizationHandler.HmacAuthV4Handler(self.obsRequest).handle()
-            else:
-                AuthorizationHandler.HmacAuthV2Handler(self.obsRequest).handle()
-        except Exception, data:
-            import traceback
-            stack = traceback.format_exc()
-            logging.error('add authorization exception, %s\n%s' % (data, stack))
+
+        if not my_http_connection.anonymous:
+            try:
+                # handle auth
+                if self.obsRequest.AuthAlgorithm.lower() == 'awsv2':
+                    AuthorizationHandler.HmacAuthV2Handler(self.obsRequest).handle()
+                elif self.obsRequest.AuthAlgorithm.lower() == 'awsv4':
+                    AuthorizationHandler.HmacAuthV4Handler(self.obsRequest).handle()
+                elif random.randint(0, 1):
+                    AuthorizationHandler.HmacAuthV4Handler(self.obsRequest).handle()
+                else:
+                    AuthorizationHandler.HmacAuthV2Handler(self.obsRequest).handle()
+            except Exception, data:
+                import traceback
+                stack = traceback.format_exc()
+                logging.error('add authorization exception, %s\n%s' % (data, stack))
 
         # 初始化一个请求的结果
         self.defineResponse = DefineResponse()
@@ -303,7 +306,7 @@ class OBSRequestHandler:
             if len(request_id) > 0:
                 logging.debug('find request here %s' % request_id)
                 return request_id
-        return ''
+        return '9999999999999997'
 
     # cal_md5:计算请求request还是响应response的MD5, 默认为空，表示不计算。
     # 若计算请求的MD5，则在对象最后33个字节记录之前数据内容的!MD5,便于校验数据。
@@ -476,7 +479,7 @@ class OBSRequestHandler:
                             self.__init__(self.obsRequest, self.myHTTPConnection)
                             logging.info(
                                 'redirect the request to %s%s' % (self.myHTTPConnection.host, self.obsRequest.url))
-                            self.make_request(cal_md5)
+                            self.make_request(cal_md5, memory_file)
                             return
             elif http_response.status < 500:
                 logging.warn(

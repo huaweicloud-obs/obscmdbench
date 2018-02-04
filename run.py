@@ -21,7 +21,7 @@ from constant import Mode
 from constant import Role
 import threading
 
-VERSION = '-------------------obscmdbench: v2.1.0, Python: %s-------------------\n' % sys.version.split(' ')[0]
+VERSION = '-------------------obscmdbench: v2.2.1, Python: %s-------------------\n' % sys.version.split(' ')[0]
 valid_start_time = None
 
 
@@ -164,6 +164,12 @@ def read_config(config_file='config.dat'):
             CONFIG['IsRandomDelete'] = True
         else:
             CONFIG['IsRandomDelete'] = False
+        if CONFIG['Anonymous'].lower() == 'true':
+            CONFIG['Anonymous'] = True
+        else:
+            CONFIG['Anonymous'] = False
+        if CONFIG['PutTimesForOnePart']:
+            CONFIG['PutTimesForOnePart'] = int(CONFIG['PutTimesForOnePart'])
 
         CONFIG['StopWindowSeconds'] = int(CONFIG['StopWindowSeconds']) if CONFIG['StopWindowSeconds'] else 0
         CONFIG['RunWindowSeconds'] = int(CONFIG['RunWindowSeconds']) if CONFIG['RunWindowSeconds'] else 0
@@ -1389,10 +1395,7 @@ def put_object(process_id, user, conn, result_queue):
                             'ObjectNamePrefix', CONFIG['ObjectNamePrefix'])
                         rest.key = hashlib.md5(object_name).hexdigest() + '-' + object_name
                 else:
-                    object_name = CONFIG['ObjectNamePartten'].replace('processID', str(process_id)).replace('Index',
-                                                                                                            str(
-                                                                                                                j)).replace(
-                        'ObjectNamePrefix', CONFIG['ObjectNamePrefix'])
+                    object_name = Util.random_string_create(86)
                     rest.key = hashlib.md5(object_name).hexdigest() + '-' + object_name
             if CONFIG['SrvSideEncryptType'].lower() == 'sse-c':
                 rest.headers['x-amz-server-side-encryption-customer-key'] = base64.b64encode(rest.key[-32:].zfill(32))
@@ -1463,6 +1466,10 @@ def handle_from_objects(request_type, rest, process_id, user, conn, result_queue
             dstTime = (pointer - start_index) * 1.0 / CONFIG['TpsPerThread'] + startTime
             waitTime = dstTime - time.time()
             if waitTime > 0:  time.sleep(waitTime)
+        if CONFIG['WindowMode']:  # 运行窗口时间限制
+            window_time_now = (time.time() - valid_start_time.value) % CONFIG['WindowTime']
+            if window_time_now > CONFIG['RunWindowSeconds']:
+                time.sleep(CONFIG['WindowTime'] - window_time_now)
         rest.bucket = OBJECTS[pointer][:OBJECTS[pointer].find('/')]
         rest.key = OBJECTS[pointer][OBJECTS[pointer].find('/') + 1:]
         if CONFIG['Testcase'] in (202,) and CONFIG['Range']:
@@ -1495,6 +1502,10 @@ def handle_from_obj_v(request_type, obj_v_file, rest, process_id, user, conn, re
             dstTime = totalRequests * 1.0 / CONFIG['TpsPerThread'] + startTime
             waitTime = dstTime - time.time()
             if waitTime > 0:  time.sleep(waitTime)
+        if CONFIG['WindowMode']:  # 运行窗口时间限制
+            window_time_now = (time.time() - valid_start_time.value) % CONFIG['WindowTime']
+            if window_time_now > CONFIG['RunWindowSeconds']:
+                time.sleep(CONFIG['WindowTime'] - window_time_now)
         totalRequests += 1
         obj = obj[:-1]
         rest.bucket = obj.split('\t')[0]
@@ -2141,22 +2152,24 @@ def upload_part(process_id, user, conn, result_queue):
                 # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求 / 限制TPS + 并发开始时间
                 dstTime = totalRequests * 1.0 / CONFIG['TpsPerThread'] + startTime
                 waitTime = dstTime - time.time()
-                if waitTime > 0:  time.sleep(waitTime)
+                if waitTime > 0:
+                    time.sleep(waitTime)
             rest.queryArgs['partNumber'] = str(i)
-            if not fixed_size:
-                rest.contentLength, fixed_size = Util.generate_a_size(CONFIG['PartSize'])
             if CONFIG['SrvSideEncryptType'].lower() == 'sse-c':
                 rest.headers['x-amz-server-side-encryption-customer-key'] = base64.b64encode(rest.key[-32:].zfill(32))
                 rest.headers['x-amz-server-side-encryption-customer-key-MD5'] = base64.b64encode(
                     hashlib.md5(rest.key[-32:].zfill(32)).digest())
-            resp = obsPyCmd.OBSRequestHandler(rest, conn).make_request(cal_md5=CONFIG['CalHashMD5'],
-                                                                       memory_file=SHARE_MEM)
-            result_queue.put(
-                (process_id, user.username, rest.recordUrl, request_type, resp.start_time,
-                 resp.end_time, resp.send_bytes, resp.recv_bytes, '', resp.request_id, resp.status, resp.id2))
+            for _ in xrange(CONFIG['PutTimesForOnePart']):
+                if not fixed_size:
+                    rest.contentLength, fixed_size = Util.generate_a_size(CONFIG['PartSize'])
+                resp = obsPyCmd.OBSRequestHandler(rest, conn).make_request(cal_md5=CONFIG['CalHashMD5'],
+                                                                           memory_file=SHARE_MEM)
+                result_queue.put(
+                    (process_id, user.username, rest.recordUrl, request_type, resp.start_time, resp.end_time,
+                     resp.send_bytes, resp.recv_bytes, resp.return_data, resp.request_id, resp.status, resp.id2))
+                totalRequests += 1
             if resp.status.startswith('200 '):
                 parts_record += '%d:%s,' % (i, resp.return_data)
-            totalRequests += 1
         upload_id.append(parts_record)
     # 记录各段信息到本地文件 ，parts_etag-x.dat，格式：桶名\t对象名\tupload_id\tpartNo:Etag,partNo:Etag,...
     part_record_file = 'data/parts_etag-%d.dat' % process_id
@@ -2526,19 +2539,21 @@ def multi_parts_upload(process_id, user, conn, result_queue):
                         rest.key[-32:].zfill(32))
                     rest.headers['x-amz-server-side-encryption-customer-key-MD5'] = base64.b64encode(
                         hashlib.md5(rest.key[-32:].zfill(32)).digest())
-                if not fixed_size:
-                    rest.contentLength, fixed_size = Util.generate_a_size(CONFIG['PartSize'])
                 if CONFIG['TpsPerThread']:  # 限制tps
                     # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求 / 限制TPS + 并发开始时间
                     dstTime = totalRequests * 1.0 / CONFIG['TpsPerThread'] + startTime
                     waitTime = dstTime - time.time()
-                    if waitTime > 0:  time.sleep(waitTime)
-                resp = obsPyCmd.OBSRequestHandler(rest, conn).make_request(cal_md5=CONFIG['CalHashMD5'],
-                                                                           memory_file=SHARE_MEM)
-                result_queue.put(
-                    (process_id, user.username, rest.recordUrl, rest.requestType, resp.start_time,
-                     resp.end_time, resp.send_bytes, resp.recv_bytes, '', resp.request_id, resp.status, resp.id2))
-                totalRequests += 1
+                    if waitTime > 0:
+                        time.sleep(waitTime)
+                for _ in xrange(CONFIG['PutTimesForOnePart']):
+                    if not fixed_size:
+                        rest.contentLength, fixed_size = Util.generate_a_size(CONFIG['PartSize'])
+                    resp = obsPyCmd.OBSRequestHandler(rest, conn).make_request(cal_md5=CONFIG['CalHashMD5'],
+                                                                               memory_file=SHARE_MEM)
+                    result_queue.put(
+                        (process_id, user.username, rest.recordUrl, rest.requestType, resp.start_time,
+                         resp.end_time, resp.send_bytes, resp.recv_bytes, '', resp.request_id, resp.status, resp.id2))
+                    totalRequests += 1
                 if resp.status.startswith('200 '):
                     part_etags[part_number] = resp.return_data
                 part_number += 1
@@ -2883,10 +2898,7 @@ def post_object(process_id, user, conn, result_queue):
                         j)).replace(
                         'ObjectNamePrefix', CONFIG['ObjectNamePrefix'])
                 else:
-                    object_name = CONFIG['ObjectNamePartten'].replace('processID', str(process_id)).replace('Index',
-                                                                                                            str(
-                                                                                                                j)).replace(
-                        'ObjectNamePrefix', CONFIG['ObjectNamePrefix'])
+                    object_name = Util.random_string_create(86)
                     rest.key = hashlib.md5(object_name).hexdigest() + '-' + object_name
             if CONFIG['SrvSideEncryptType'].lower() == 'sse-c':
                 rest.headers['x-amz-server-side-encryption-customer-key'] = base64.b64encode(rest.key[-32:].zfill(32))
@@ -2959,12 +2971,12 @@ def start_process(process_id, user, test_case, results_queue, valid_start_time, 
                 break
         time.sleep(2)
 
-    # 若长连接分配连接。考虑混合操作重复执行场景，若已有连接，不分配连接
+    # 考虑混合操作重复执行场景，若已有连接，不分配连接
     if not conn:
         conn = obsPyCmd.MyHTTPConnection(host=CONFIG['OSCs'], is_secure=CONFIG['IsHTTPs'],
                                          ssl_version=CONFIG['sslVersion'], timeout=CONFIG['ConnectTimeout'],
                                          serial_no=process_id, long_connection=CONFIG['LongConnection'],
-                                         conn_header=CONFIG['ConnectionHeader'])
+                                         conn_header=CONFIG['ConnectionHeader'], anonymous=CONFIG['Anonymous'])
     if test_case != 900:
         try:
             method_to_call = globals()[TESTCASES[test_case].split(';')[1]]
@@ -3119,14 +3131,14 @@ def precondition():
 def get_objects_from_file(file_name):
     global OBJECTS
     if not os.path.exists(file_name):
-        print 'ERROR，the file configured %s in config.dat  not exist' % file_name
+        print 'ERROR，the file configured %s in config.dat not exist' % file_name
         sys.exit(0)
     try:
         with open(file_name, 'r') as fd:
             for line in fd:
                 if line.strip() == '':
                     continue
-                if len(line.split(',')) != 12:
+                if len(line.split(',')) != 13:
                     continue
                 if line.split(',')[2][1:].find('/') == -1:
                     continue

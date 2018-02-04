@@ -1,11 +1,9 @@
 #  -*- coding:utf-8 -*- 
-import random
 import sys
 import time
 from multiprocessing import Process
 import logging
 import os
-import fileinput
 import Queue
 import copy
 
@@ -353,7 +351,7 @@ class ResultWriter(Process):
                     self.__writeRealTimeFile__(
                         self.last10_Realtime_Stat[sorted(self.last10_Realtime_Stat, reverse=True)[1189]])
                     # 从统计缓存中删除最旧的结果
-                    self.last10_Realtime_Stat.pop(sorted(self.last10_Realtime_Stat)[0])
+                    del self.last10_Realtime_Stat[sorted(self.last10_Realtime_Stat)[0]]
 
         # 性能结果统计和打印结果到屏幕有条件刷新        
         if (time.time() - self.lastUpdateTime < self.refresh_frequency) and self.totalRequests != \

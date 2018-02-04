@@ -300,6 +300,9 @@
     # 示例：PartSize = 5242880~10485760 范围内随机
     # 示例：PartSize = 5242880,10485760  可选值随机
     PartSize = 5242880
+
+    # 每个段上传次数，多次上传覆盖。多用于段覆盖测试。
+    PutTimesForOnePart = 1
     
 #############    "213=CopyPart"    ############################################################
 
@@ -422,8 +425,11 @@
     RunWindowSeconds =
     StopWindowSeconds =
 
+    # 匿名访问，不带鉴权相关的头域
+    Anonymous = false
+
     # 是否打印运行中的实时结果和进度。自动化调用工具时关闭。
-    PrintProgress = True
+    PrintProgress = true
 
     # 性能统计结果是否包含各个请求的时延，true|false，关闭该功能不影响性能结果统计
     LatencyPercentileMap = true
