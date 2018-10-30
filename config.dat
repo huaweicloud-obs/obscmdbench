@@ -1,457 +1,519 @@
-####################################################################test environment########################################################################################################################################################################################################################################################################
+#################test environment##################################################################
 
-    ## [OSCs] The IP address of the system under test's endpoint. If the configuration item [UseDomainName] is True, this item is ignored.
-    ## ## Example: OSCs = 172.20.41.3, 172.20.41.4, 172.20.41.2
-    ## ## Long connection, the system polls the OSC to establish a connection. The configuration uses a short connection, and each request randomly selects an OSC request.
-   
-    ##  OSCs = 100.125.80.202,
-	OSCs = obs.cidc-rp-11.joint.ecloud.10086.cn
+    # [OSCs]OSC的IP地址。若配置项 [UseDomainName]为True，此项忽略。
+    # 示例：OSCs =  172.20.41.3,172.20.41.4,172.20.41.2
+    # 长连接，系统轮询OSC建立连接。配置使用短连接，每次请求随机选择 OSC请求。
+    OSCs = 127.0.0.1
 
-######################################test case plan####################################################################################################################################
+###################test case plan##################################################################
 
-    ## Configure the test case, and the corresponding operation of the use case is as follows.
-    Testcase = 101
+    # 配置测试用例，用例对应操作见下。
+    Testcase = 900
     
-    ## test users number, 1 user corresponds to a line of user information in users.dat
-    Users = 1
-    ## Load the user's starting line number from user.dat, starting from 0, blank line skipping is not counted.
+    # 用户数，1个用户对应users.dat中的一行用户信息
+    Users = 10
+    # 从user.dat中加载用户的起始行号,从0开始，空行跳过不计入。
     UserStartIndex = 0
     
-    ## Concurrency of each user, the default is 1, indicating that 1 user corresponds to 1 concurrent. 1 concurrent means 1 thread.
-    ## If the configuration item [LongConnection] is True, one uses one HTTP/HTTPs connection repeatedly.
+    # 每个用户对应的的并发数，默认为1，表示1个用户对应1个并发。1个并发表示1个线程.
+    # 若配置项 [LongConnection]为True, 一个反复使用1个HTTP/HTTPs连接。
     ThreadsPerUser = 1
     
     
-    ## Testcase reference
-        ## 100 = ListUserBuckets
-        ## 101 = CreateBucket
-        ## 102 = ListObjectsInBucket
-        ## 103 = HeadBucket
-        ## 104 = DeleteBucket
-        ## 105 = BucketDelete
-        ## 106 = OPTIONSBucket
-        ## 111 = PutBucketVersioning
-        ## 112 = GetBucketVersioning
-        ## 141 = PutBucketWebsite
-        ## 142 = GetBucketWebsite
-        ## 143 = DeleteBucketWebsite
-        ## 151 = PutBucketCORS
-        ## 152 = GetBucketCORS
-        ## 153 = DeleteBucketCORS
-        ## 161 = PutBucketTag
-        ## 162 = GetBucketTag
-        ## 163 = DeleteBucketTag
-        ## 164 = PutBucketLog ##PutBucketAcl authorization must be executed first
-        ## 165 = GetBucketLog
-        ## 167 = PutBucketStorageQuota
-        ## 168 = GetBucketStorageQuota
-        ## 170 = PutBucketAcl
-        ## 171 = GetBucketAcl
-        ## 173 = PutBucketPolicy
-        ## 174 = GetBucketPolicy
-        ## 175 = DeleteBucketPolicy
-        ## 176 = PutBucketLifecycle
-        ## 177 = GetBucketLifecycle
-        ## 178 = DeleteBucketLifecycle
-        ## 179 = PutBucketNotification
-        ## 180 = GetBucketNotification
-        ## 182 = GetBucketMultiPartsUpload
-        ## 185 = GetBucketLocation
-        ## 188 = GetBucketStorageInfo
-        ## 201 = PutObject
-        ## 202 = GetObject
-        ## 203 = HeadObject
-        ## 204 = DeleteObject
-        ## 205 = DeleteMultiObjects
-        ## 206 = CopyObject
-        ## 207 = RestoreObject ##Retrieve the cold object
-        ## 211 = InitMultiUpload
-        ## 212 = UploadPart
-        ## 213 = CopyPart
-        ## 214 = CompleteMultiUpload
-        ## 215 = AbortMultiUpload
-        ## 216 = MultiPartsUpload ## Each concurrent order completes multi-segment initialization of each object -> upload segment -> merge segment, the difference with 900 MixOperation = 211, 212, 213: 900 initializes all object segments and then uploads segments.
-        ## 217 = GetObjectUpload  ## Need to execute InitMultiUpload first
-        ## 218 = PutObjectAcl
-        ## 219 = GetObjectAcl
-        ## 221 = OptionsObject
-        ## 226 = PostObject
-        ## 900 = MixOperation
+    # Testcase参照
+        # 100 = ListUserBuckets
+        # 101 = CreateBucket
+        # 102 = ListObjectsInBucket
+        # 103 = HeadBucket
+        # 104 = DeleteBucket
+        # 105 = BucketDelete
+        # 106 = OPTIONSBucket
+        # 111 = PutBucketVersioning
+        # 112 = GetBucketVersioning
+        # 141 = PutBucketWebsite
+        # 142 = GetBucketWebsite
+        # 143 = DeleteBucketWebsite
+        # 151 = PutBucketCORS
+        # 152 = GetBucketCORS
+        # 153 = DeleteBucketCORS
+        # 161 = PutBucketTag
+        # 162 = GetBucketTag
+        # 163 = DeleteBucketTag
+        # 164 = PutBucketLog    #需先执行PutBucketAcl授权
+        # 165 = GetBucketLog
+        # 167 = PutBucketStorageQuota
+        # 168 = GetBucketStorageQuota
+        # 170 = PutBucketAcl
+        # 171 = GetBucketAcl
+        # 173 = PutBucketPolicy
+        # 174 = GetBucketPolicy
+        # 175 = DeleteBucketPolicy
+        # 176 = PutBucketLifecycle
+        # 177 = GetBucketLifecycle
+        # 178 = DeleteBucketLifecycle
+        # 179 = PutBucketNotification
+        # 180 = GetBucketNotification
+        # 182 = GetBucketMultiPartsUpload
+        # 185 = GetBucketLocation
+        # 188 = GetBucketStorageInfo
+        # 201 = PutObject
+        # 202 = GetObject
+        # 203 = HeadObject
+        # 204 = DeleteObject
+        # 205 = DeleteMultiObjects
+        # 206 = CopyObject
+        # 207 = RestoreObject #取回冷对象
+        # 208 = AppendObject  #追加写
+        # 209 = ImageProcess  #图片转码
+        # 211 = InitMultiUpload
+        # 212 = UploadPart
+        # 213 = CopyPart
+        # 214 = CompleteMultiUpload
+        # 215 = AbortMultiUpload
+        # 216 = MultiPartsUpload    #每个并发顺序完成每个对象多段初始化->上传段->合并段，同900 MixOperation=211,212,213的区别：900初始化所有对象段后再上传段。
+        # 217 = GetObjectUpload    #需先执行InitMultiUpload
+        # 218 = PutObjectAcl
+        # 219 = GetObjectAcl
+        # 221 = OptionsObject
+        # 226 = PostObject
+        # 900 = MixOperation
 
-########################## "100=ListUserBuckets" ############################################################################################ ########################################################################################################
+#############   "100=ListUserBuckets"   #############################################################
 
-    ## The number of concurrent requests is valid only for the 100=ListUserBuckets operation.
+    # 每个并发的请求次数，仅对100=ListUserBuckets操作有效。
     RequestsPerThread = 2000
 
 
-########################## "101=CreateBucket" ############################################################################################## ##########################################################################################################
+#############   "101=CreateBucket"    ###############################################################
 
-    ## Number of buckets to be created by each user more than 0, if it exceeds 100, the system will return a 409 error. To avoid mixed business conflicts, all buckets are created once per concurrent per user.
-    BucketsPerUser = 1
-    ## Specify the bucket location when creating, cannot contain spaces, and empty means not specified.
-    BucketLocation = cidc-rp-11
-    ## Create a bucket to specify an ACL.
-    ## private | public-read |public-read-write | authenticated-read |
-    ## bucket-owner-read | bucket-owner-full-control, empty without carrying
-    ## If you specify non-empty, the header field is carried in the request to create a bucket. x-amz-acl: Corresponding to acl
+    # 每个用户要创建的桶数：>=0，超过100，系统会返回409错误。为避免混合业务冲突，每个用户的每个并发都会创建一次所有桶。
+    BucketsPerUser = 10
+    # 创建时指定桶Location, 不能包含空格，空代表不指定。
+    BucketLocation = 
+    # 创建桶指定ACL，可选：
+    # private | public-read |public-read-write | authenticated-read |
+    # bucket-owner-read | bucket-owner-full-control, 空不携带
+    # 若指定非空,则在创建桶请求中携带头域 x-amz-acl:对应acl
     CreateWithACL = public-read-write
-    ## Custom ID in the bucket name, the system automatically generates the bucket name format:
-    ## user ak lowercase +'.' + bucketNamePrefix + '.' + index, index from 0 to BucketsPerUser-1
-    BucketNamePrefix = bucket-test-cmcc
-    ## Create a bucket to specify x-default-storage-class, optional: STANDARD, STANDARD_IA and GLACIER, or STANDARD, STANDARD_IA, GLACIER multiple selection, the system will randomly select the type from
+    # 桶名中自定义标识，系统自动 生成桶名格式：
+    # 用户ak小写 +'.' + bucketNamePrefix + '.' + index, index 从0到BucketsPerUser-1
+    BucketNamePrefix = bucket.test
+    # 创桶指定x-default-storage-class, 可选：STANDARD、STANDARD_IA和GLACIER, 也可以STANDARD,STANDARD_IA,GLACIER多选, 系统将从中随机选取类型
     StorageClass =
+    # 是否创建文件网关桶
+    IsFileInterface = false
 
-########################## "102=ListObjectsInBucket" ############################################################################################ ##################################################
+#############   "102=ListObjectsInBucket"   #########################################################
 
-    ## The number of objects requested at one time, corresponding to the max-keys parameter in the interface, valid from 1 to 1000, or more than 1000, but the system returns up to 1000.
+    # 一次请求的对象数，对应接口中的max-keys参数，1~1000有效， 也可配置多于1000，但系统最多返回1000
     Max-keys = 1000
-    ## List without multiple versions.
+    # 列举不带多版本。
+    prefix =
 
-########################## "103=HeadBucket" ############################################################################################ ##########################################################################################################
+#############   "103=HeadBucket"    ###############################################################
 
-    ## Head 101=All buckets created by CreateBucket.
+    # Head 101=CreateBucket创建的所有桶。
     
-########################## "104=DeleteBucket" ############################################################################################ ########################################################################################################
+#############   "104=DeleteBucket"    ##############################################################
 
-    ## Delete 101=All buckets created in the CreateBucket configuration.
+    # 删除101=CreateBucket配置中创建的所有桶。
     
-########################## "105=DeleteBucket" ############################################################################################ ########################################################################################################
+#############   "105=DeleteBucket"    ##############################################################
 
-    ## Force delete 101=All buckets created in the CreateBucket configuration.
+    # 强制删除101=CreateBucket配置中创建的所有桶。
     
-########################## "106=OPTIONSBucket" ############################################################################################## ########################################################################################################
+#############   "106=OPTIONSBucket"    ##############################################################
 
-    ## OPTIONS 101=All buckets created in the CreateBucket configuration.
-    ## To process OPTIONS, the bucket of OBS must already have CORS configured
+    # OPTIONS 101=CreateBucket配置中创建的所有桶。    
+    # 要处理OPTIONS，OBS的桶必须已经配置CORS
 
 
-########################## "111=PutBucketVersioning" ############################################################################################ ########################################################################################################
+#############   "111=PutBucketVersioning"    ##############################################################
 
-    ## PutBucketVersioning 101=All buckets created in the CreateBucket configuration.
-    ##bucket version status, optional value Enabled | Suspended
+    # PutBucketVersioning 101=CreateBucket配置中创建的所有桶。
+    # 桶多版本状态，可选值Enabled | Suspended
     VersionStatus = Enabled
 
 
-########################## "112=GetBucketVersioning" ############################################################################################ ########################################################################################################
+#############   "112=GetBucketVersioning"    ##############################################################
 
-    ## GetBucketVersioning 101=All buckets created in the CreateBucket configuration.
+    # GetBucketVersioning 101=CreateBucket配置中创建的所有桶。
 
-########################## "141=PutBucketWebsite" ############################################################################################ ######################################################
+#############   "141=PutBucketWebsite"  ###########################################################
 
     RedirectHostName = example.com
     
-########################## "142=GetBucketWebsite" ############################################################################################ ####################################################
+#############   "142=GetBucketWebsite"    ##########################################################
 
-########################## "143=DeleteBucketWebsite" ############################################################################################ ##############################################
+#############   "143=DeleteBucketWebsite"    #######################################################
 
-########################## "151=PutBucketCORS" ######################################################################################
+#############   "151=PutBucketCORS"    #########################################################
 
-	##AllowedMethodValid values GET, PUT, HEAD, POST, DELETE can take multiple methods
-    ## In order to ensure consistent methods, this parameter is also obtained in OPTIONSBucket and OptionsObject.
+    #AllowedMethod有效值GET、PUT、HEAD、POST 、DELETE可带多个方法
+    #为了保障方法一致，OPTIONSBucket和OptionsObject中也是取得这个参数
     AllowedMethod = GET
 
+#############   "152=GetBucketCORS"    #########################################################
 
-##########################   "161=PutBucketTag"    ##################################################################################################################
-	##Authentication method must be AWSV4, ie AuthAlgorithm = AWSV4
-    ##Configure key-value logarithm, default 1, maximum 10
+#############   "153=DeleteBucketCORS"    #######################################################
+
+#############   "161=PutBucketTag"    #########################################################
+
+    #鉴权方法必须为ASWV4 ,即AuthAlgorithm = AWSV4
+    #配置key-value对数，默认1，最大10
     KeyValueNumber = 10
 
-##########################   "179=PutBucketNotification"    ######################################################################################################
+#############   "162=GetBucketTag"    #########################################################
 
-    ##need modify /opt/dfv/obs_service_layer/objectwebservice/osc/conf/obs_sod.properties  smn_connection = true
-	
-##########################    "201=PutObject" ####################################################################################################################################
+#############   "163=DeleteBucketTag"    #######################################################
 
-	## Each concurrently uploads an object to its own BucketsPerUser bucket.
-    ##[ObjectSize]Uploaded object size (bytes)
-    ## Example: ObjectSize = 4096 Uploads a specified size object. 4096=4K, 104857600=100MB, 65536=64K
-    ## Example: ObjectSize = 0~1024 Upload a random size object. 0 ~ 1024 bytes
-    ## Example: ObjectSize = 0,1024,2048 Randomly upload objects of size 0,1024 or 2048.
-    ##  ObjectSize = 4096~104857600
-    ObjectSize = 1073741824
-    ##Number of objects uploaded by each concurrent in each bucket
-    ObjectsPerBucketPerThread = 100
-    ## Upload the number of each object name and upload it multiple times. Mostly used for multi-version or object coverage testing.
+#############   "179=PutBucketNotification"    ###################################################
+
+    #需修改/opt/dfv/obs_service_layer/objectwebservice/osc/conf/obs_sod.properties  smn_connection = true
+
+#############    "201=PutObject" ##################################################################
+
+    # 每个并发向自身的BucketsPerUser个桶中上传对象。
+    #[ObjectSize]上传的对象大小（字节）
+    # 示例： ObjectSize = 4096 上传指定大小对象。4096=4K, 104857600=100MB, 65536=64K
+    # 示例：ObjectSize = 0~1024 上传随机大小对象。 0 ~ 1024  bytes 
+    # 示例：ObjectSize = 0,1024,2048  随机上传大小为0,1024或2048大小的对象。
+    ObjectSize = 4096~104857600
+    #ObjectSize = 10485760
+
+    # 每个并发在每个桶中上传的对象数
+    ObjectsPerBucketPerThread = 1000
+    # 每个对象名上传次数，多次上传覆盖。多用于多版本或对象覆盖测试。
     PutTimesForOneObj = 1
-	## Upload object and specify ACL at the same time, optional: private | public-read | public-read-write | authenticated-read
-    ## bucket-owner-read | bucket-owner-full-control, empty without carrying
+    
+    #上传对象同时指定ACL,可选：private | public-read |public-read-write | authenticated-read 
+    # bucket-owner-read | bucket-owner-full-control, 空不携带
     PutWithACL = public-read
 
-    ##Object is the lexicographical order, if it is false, the system randomly generates the object name, the length is 15~1024 bytes.
-    ##If the object name is not a lexicographical order, the download and delete tests under the out-of-order order cannot be performed.
+    #对象是否字典序，若为false，系统则随机生成对象名，长度15~1024字节。
+    #若对象名非字典序，则无法进行乱序下的下载和删除测试。
     ObjectLexical = true
 
-    ##If ObjectLexical is set to true, the object name format refers to the configuration item ObjectNamePartten
+    #若配置ObjectLexical为true, 对象名格式参考配置项 ObjectNamePartten
     ObjectNamePrefix = object.test
 
-    ##object name partten, lexicographically valid, generally not modified. If the modification is to ensure that the same configuration is used for other operations of the uploaded object.
-    ##Make sure processID, ObjectNamePrefix, Index 3 strings exist, the order of the fields and the connected characters (strings) can be defined.
-    ##Index: From 0~ObjectsPerBucketPerThread-1
-    ##processID: Concurrency number, starting from 0
+    #对象名partten, 字典序时有效，一般不修改。若修改需保证对上传对象的其它操作使用相同的配置。
+    #保证processID，ObjectNamePrefix，Index 3个字符串存在，字段顺序和之间连接字符(串）可定义。
+    #Index： 从0~ObjectsPerBucketPerThread-1
+    #processID：并发号，从0开始
     ObjectNamePartten = processID-ObjectNamePrefix-Index
-    ##If the bucket has multiple versions enabled, upload the object and write the obtained object version information under data/objv-{0...}.dat. For download and delete use.
+    #若桶已开启多版本，则上传对象后把获取到的对象版本信息写在data/objv-{0...}.dat下。供下载和删除使用。
 
-    ## Create object specified x-default-storage-class, optional: STANDARD, STANDARD_IA and GLACIER, STANDARD, STANDARD_IA, GLACIER multiple selection, the system will randomly select the type
+    # 创建对象指定x-default-storage-class, 可选：STANDARD、STANDARD_IA和GLACIER, 也可以STANDARD,STANDARD_IA,GLACIER多选, 系统将从中随机选取类型
     ObjectStorageClass =
+    # 设置x-obs-expires头域的值
+    Expires =
 
-########################## "202=GetObject" ############################################################################################ 
-    ## Find object processing in the following order:
-    ## 1) Check if the detail file generated during upload is specified. (The object name can be non-lexicographic when uploaded), such as objectDesFile=result/abc.csv
-    objectDesFile =
+    # 以指定对象的内容作为上传对象的实际内容而不从内存中生成（当前图片转码需要）
+    IsDataFromFile = False
 
-    ## 2) Check if there is any concurrent data/objv-{0...}.dat file. If the bucket is open with multiple versions, the uploaded object will automatically generate the file.
-    ## File records the multi-version information of the object, and reads from the file to download according to the specified version.
+    # 指定对象路径，请给出完整路径。
+    # 示例：/home/tata.jpg
+    LocalFilePath =
 
 
-    ## 3) Download the object according to the tool naming rules, download all objects uploaded in 201=PutObject, and the uploaded object name requires lexicographic order.
+#############   "202=GetObject"    ################################################################
+    # 按以下顺序查找对象处理：
+    # 1) 查看是否指定了上传时生成的detail文件。（上传时对象名可非字典序）如objectDesFile=result/abc.csv
+    objectDesFile = 
 
-    ## Specify Range download object, empty means not specified. The format refers to the http 1.1 protocol Range definition, such as optional legal values:
-    ## 0-9 ##Request the contents of the object from 0th to 9th bytes.
-    ## 9- ##Request the contents of the object from the ninth and subsequent bytes.
-    ## -200 ##Request the last 200 bytes of the object content.
-    ## 0-1,5- ##Request multiple range segments of the object's flesh.
-    ## Multiple ranges are separated by semicolons; Such as 0-1; 3-5; 6-10 (can be overlapped), the tool randomly selects each time.
+    # 2) 查看是否有任一个并发对应的data/objv-{0...}.dat文件。若桶开启多版本，上传对象会自动生成该文件。
+    #  文件记录了对象多版本信息，从该文件内读取按指定版本下载。
+
+
+    # 3) 按工具命名规则下载对象，下载201=PutObject中上传的所有对象，上传的对象名要求字典序。
+
+    #指定Range下载对象，空表示不指定。格式参考http 1.1协议Range定义,如可选合法值：
+    # 0-9          #请求对象内容的从第0到第9个字节。
+    # 9-           #请求对象内容的从第9个及以后的字节。
+    # -200         #请求对象内容的最后200个字节。
+    # 0-1,5-       #请求对象肉容的多个range段.
+    # 多个range用分号;隔开。如0-1;3-5;6-10(可以重叠），工具每次请求随机选择。
     Range =
 
-    ## Whether to randomly acquire the switch
-    ## Random acquisition does not need to traverse all upload objects in 201=PutObject. This configuration is a performance test requirement. For scenes with too many objects, it is recommended to close.
+    # 是否随机获取开关
+    # 随机获取无需遍历所有201=PutObject中上传对象，该配置属于性能测试需求，对于对象数过大的场景，建议关闭
     IsRandomGet = false
 
-########################## "203=HeadObject" ############################################################################################ 
+    # cdn开关，判断是否折扣计费，如果为true，请提供CdnAk与CdnSK以及CdnSTSToken
+    IsCdn = false
 
-     ##If 201 specifies objectDesFile, the object name is obtained from the file.
+    # Cnd的AK、SK，用于计算V2签名
+    CdnAK =
+    CdnSK =
+
+    # 由IAM提供的cdn Token
+    CdnSTSToken =
+
+#############   "203=HeadObject"    #################################################################
+
+    #若201指定objectDesFile，则从文件获取对象名。
     
-     ## Otherwise, Head 201=All objects uploaded in PutObject.
-##########################    "204=DeleteObject" ################################################################################################################################
-## Find object processing in the following order:
-     ## If 201 specifies objectDesFile, the object name is obtained from the file.
-     ## If there is an object multi-version record under data/objv-{0...}.dat, the read from the file is deleted according to the specified version.
-     ## Delete 201=All objects uploaded in PutObject.
+    #否则，Head 201=PutObject中上传的所有对象。
+ 
 
-     ## Whether to delete randomly
-     ## Randomly deleted, this configuration is a performance test requirement. For scenarios with too many objects, it is recommended to close it.
-     IsRandomDelete = false
+#############    "204=DeleteObject" ################################################################
+    # 按以下顺序查找对象处理：
+    # 若201指定objectDesFile，则从文件获取对象名。
+    # 若data/objv-{0...}.dat下存在对象多版本记录，则从该文件内读取按指定版本删除。
+    # 删除 201=PutObject中上传的所有对象。
 
-##########################    "205=DeleteMultiObjects"    ##############################################################################################################
+    # 是否随机删除
+    # 随机删除，该配置属于性能测试需求，对于对象数过大的场景，建议关闭
+    IsRandomDelete = false
 
-     ##1 The number of objects requested to be deleted, 1~100, otherwise the server returns 400 error.
-     ##Please ensure that the number of concurrent objects per object (ObjectsPerBucketPerThread) is an integer multiple of DeleteCountPerRequest.
-     ##If it is not an integer multiple, the program defaults to each bucket (ObjectsPerBucketPerThread/DeleteCountPerRequest) +1 batch delete request.
-     DeleteObjectsPerRequest = 3
+#############    "205=DeleteMultiObjects"    #######################################################
 
+    #一次请求删除的对象数，1~100个，否则服务器返回400错误。
+    #请确保每个桶每个并发已有对象数（ObjectsPerBucketPerThread）为DeleteCountPerRequest的整数倍。
+    #若非整数倍，程序对每个桶默认进行(ObjectsPerBucketPerThread/DeleteCountPerRequest) +1 次批删请求。
+    DeleteObjectsPerRequest = 3
 
-##########################    "206=CopyObject"    ############################################################################################################################
+#############    "206=CopyObject"    ##############################################################
 
-    ## copySrcObjFixed copyDstObjFiexed BucketNameFixed    Results
-    ## Unspecified      Unspecified      Unspecified        Copy an object in the source bucket. The new object name is only the ObjectNamePrefix after the source object name is added.
-    ## Unspecified      Unspecified      Specify            Source object: traverse all buckets of all objects; target bucket: BucketNameFixed, new object name to source object name is only ObjectNamePrefix and then add .copy
-    ## Unspecified      Specify             *               Traverse all objects in the bucket, all copied to BucketNameFixed bucket, new object name to source object name is only ObjectNamePrefix and then add .copy
-    ## Specify          Specify             *               Source object: copySrcObjFixed, target object: copyDstObjFiexed (BucketNameFixed is ignored)
-    ## Specify          Unspecified      Unspecified        Source object: copySrcObjFixed, target object: Configured users to copy all objects in the bucket, the new object name to the source object name is only ObjectNamePrefix and then add .copy
-    ## Specify          Unspecified      Specify            Source object: copySrcObjFixed, target object: BucketNameFixed bucket, new object name to source object name is only ObjectNamePrefix and then add .copy
+    # copySrcObjFixed copyDstObjFixed BucketNameFixed  结果
+    #    未指定        未指定            未指定       在源桶内将对象拷贝一份。新对象名对源对象名只是ObjectNamePrefix后加.copy
+    #    未指定        未指定            指定         源对象：遍历所有桶所有对象；目标桶：BucketNameFixed，新对象名对源对象名只是ObjectNamePrefix后加.copy
+    #    未指定        指定              *            遍历所有桶所有对象，全部拷贝到BucketNameFixed桶，新对象名对源对象名只是ObjectNamePrefix后加.copy
+    #    指定          指定              *           源对象：copySrcObjFixed，目标对象：copyDstObjFixed（BucketNameFixed忽略）
+    #    指定          未指定            未指定       源对象：copySrcObjFixed，目标对象：配置的用户所有桶内复制对象，新对象名对源对象名只是ObjectNamePrefix后加.copy
+    #    指定          未指定            指定         源对象：copySrcObjFixed，目标对象：BucketNameFixed桶，新对象名对源对象名只是ObjectNamePrefix后加.copy
 
-    ## If copySrcObjFixed is specified, the object name is required and all users have read access to the object. Leave it blank if you don't specify it.
-    copySrcObjFixed =
-    ## If copyDstObjFiexed is specified, the target bucket is required to exist, and all users have write access to the bucket. Leave it blank if you don't specify it.
-    copyDstObjFiexed =
-    ## Source object server-side encryption algorithm. Optional value: SSE-C | Empty, case insensitive.
+    # 若指定copySrcObjFixed，要求对象名存在，且所有用户对该对象有读权限。不指定请保留为空。
+    copySrcObjFixed = 
+    # 若指定copyDstObjFixed，要求目标桶要存在，所有用户对该桶有写权限。不指定请保留为空。
+    copyDstObjFixed = 
+    # 源对象服务器端加密算法。可选值：SSE-C | 空,不区分大小写。
     copySrcSrvSideEncryptType = SSE-C
-##########################    "207=RestoreObject"    ############################################################################################################################
+
+#############    "207=RestoreObject"    ##############################################################
 
     RestoreDays =
     RestoreTier =
 
-##########################    "211=InitMultiUpload"    ################################################################################################################
-	
-	##program Initializes a multi-segment upload task for each object in each bucket
-    ## Record to local file data/upload_id-concurrency number.dat, format: username\t bucket name\tobject name\tuploadID\n
-    ## Total generation of BucketsPerUser*ObjectsPerBucketPerThread multi-segment tasks
+#############    "208=AppendObject"    ##############################################################
 
-    ## Initialize multi-session task specified x-default-storage-class, optional: STANDARD, STANDARD_IA and GLACIER, STANDARD, STANDARD_IA, GLACIER multiple selection, the system will randomly select the type
-    MultiUploadStorageClass =	
+    # 考虑到在进行追加写过程中需要记录大量对象追加写position的情况
+    # 如果是长稳测试或其它，建议通过Head对象从元数据中获取Position信息，此配置置为True
+    # 如果是性能测试，此配置建议置为False
+    GetPositionFromMeta = True
 
-##########################    "212=UploadPart"    ########################################################################################################################
+#############    "209=ImageProcess"    ##############################################################
+    # 图片处理操作类型，可选：format,resize,bright,crop,info等等。此处根据需求默认为format（图片转码）
+    # 示例：ImageManipulationType = format
+    # 示例：ImageManipulationType = format,crop 此时请求会同时处理两种操作，但务必对ImageFormat和CropParams作参数配置
+    ImageManipulationType =
 
-    ## Upload Parts For Each UploadID segments of size for each uploadID in the data/upload_id-concurrency number.dat.
-    ## Record to local file data/parts_etag-concurrency number.dat, format: bucket name object name uploadID partNo: Etag, partNo: Etag,...\n
-    ## The number of segments to upload for each uploadID [1~10000]. If the ConcurrentUpParts configuration is turned on, it needs to be configured as an integer multiple of ThreadsPerUser, otherwise the tool will automatically modify the value.
+    # 图片转码格式（图片本身格式由上传图片决定，此处不作处理），可选：jpg,png等
+    # 示例：ImageFormat = jpg  转换为指定的jpg格式，暂不支持多选
+    ImageFormat =
+
+    # 图片截取方式，可选：x_100,y_50等
+    # 示例：CropParams = x_100
+    # 示例：CropParams = x_100,y_50
+    CropParams =
+
+    # 图片缩略，可选：w_500,limit_0
+    ResizeParams =
+
+
+#############    "211=InitMultiUpload"    ########################################################
+
+    # 程序为每一个桶中的每一个对象初始化一个多段上传任务
+    # 记录到本地文件data/upload_id-并发号.dat,格式：用户名\t桶名\t对象名\tuploadID\n
+    # 共生成BucketsPerUser*ObjectsPerBucketPerThread个多段任务
+
+    # 初始化多段任务指定x-default-storage-class, 可选：STANDARD、STANDARD_IA和GLACIER, 也可以STANDARD,STANDARD_IA,GLACIER多选, 系统将从中随机选取类型
+    MultiUploadStorageClass =
+
+#############    "212=UploadPart"    ############################################################
+
+    # 为data/upload_id-并发号.dat中的每一个uploadID上传PartsForEachUploadID个大小的段。
+    # 记录到本地文件data/parts_etag-并发号.dat，格式：桶名	对象名	uploadID	partNo:Etag,partNo:Etag,...\n
+    # 每个uploadID要上传的段数量[1~10000]。若ConcurrentUpParts配置打开，需要配置为ThreadsPerUser的整数倍,否则工具自动修改该值。
     PartsForEachUploadID = 3
 
-    ## For each uploadID, whether to upload segments concurrently. Please keep off when mixing 211, 212, 213 in 900.
-    ## If the switch is on, you need to configure the relationship to be satisfied: PartsForEachUploadID = x * ThreadsPerUser (x is >=1 integer). If the tool is not satisfied, the PartForEachUploadID is automatically adjusted to the closest value.
-    ## The single uploadID concurrency tool defaults to ThreadsPerUser
+    # 针对每个uploadID是否并发上传段。在900中混合执行211,212,213时请保持关闭。
+    # 若开关打开，需要配置满足关系:PartsForEachUploadID = x * ThreadsPerUser(x为>=1整数)。若不满足工具自动调整PartsForEachUploadID为最接近的值。
+    # 单个uploadID的并发数工具默认取 ThreadsPerUser
     ConcurrentUpParts = false
 
-    ## [PartSize] The size of the uploaded segment, the obs protocol requires a minimum of 5M
-    ## Example: PartSize = 5242880 Upload the specified size segment. 5242880=5M, 104857600=100MB
-    ## Example: PartSize = 5242880~10485760 Random range
-    ## Example:PartSize = 5242880,10485760 Optional Random Values
+    # [PartSize] 上传的段大小,obs协议要求最小5M
+    # 示例： PartSize = 5242880 上传指定大小段。5242880=5M, 104857600=100MB
+    # 示例：PartSize = 5242880~10485760 范围内随机
+    # 示例：PartSize = 5242880,10485760  可选值随机
     PartSize = 5242880
 
-    ## Uploads per segment, multiple uploads. Mostly used for segment coverage testing.
+    # 每个段上传次数，多次上传覆盖。多用于段覆盖测试。
     PutTimesForOnePart = 1
+    
+#############    "213=CopyPart"    ############################################################
 
-##########################    "213=CopyPart"    ########################################################################################################################
+    # 程序为uploadID.dat中的每一个uploadID拷贝PartsForEachUploadID个大小的段。
+    # 配置参数PartsForEachUploadID，PartSize与212=UploadPart相同。
+    # 服务器端加密功能使用参数配置同拷贝对象。
+    # 源段的对象名必须从202中objectDesFile指定的文件读取，随机从里面选文件拷贝。需保证源对象存在，请求者有读权限，且大小不小于目标段。
 
-	## The program copies the segments of PartsForEachUploadID size for each uploadID in uploadID.dat.
-    ## Configure the parameters PartsForEachUploadID, PartSize is the same as 212=UploadPart.
-    ## Server-side encryption uses the parameters to configure the same copy object.
-    ## The object name of the source segment must be read from the file specified by objectDesFile in 202, and a random copy of the file is selected from the inside. It is necessary to ensure that the source object exists, the requester has read permission, and the size is not less than the target segment.
+#############    "214=CompleteMultiUpload"    ################################################
 
-##########################    "214=CompleteMultiUpload"    ################################################################################################
-    ## Combine segments for each segment task. The merged segment list is read from partsEtag.dat.
+    # 为每个段任务合并段。合并的段列表从partsEtag.dat读取。
 
-##########################    "215=AbortMultiUpload"    ################################################################################################
+#############    "215=AbortMultiUpload"    ################################################
 
-    ## Cancel the segment task, because only the segment task that has been initialized can be canceled. It is necessary to ensure the same user and concurrent configuration as the initialization segment use case.
-    ## The segment task list to be canceled is obtained from the local file local file data/upload_id-concurrency number .dat written when the segment task is initialized.
+    # 取消段任务，因为只能取消自已初始化的段任务，需要保证与初始化段用例相同的用户及并发配置。
+    # 要取消的段任务列表从初始化段任务时写入的本地文件本地文件data/upload_id-并发号.dat获取。
 
-##########################    "215=AbortMultiUpload"    ################################################################################################
+#############    "216=MultiPartsUpload"    ################################################
 
-    ## Cancel the segment task, because only the segment task that has been initialized can be canceled. It is necessary to ensure the same user and concurrent configuration as the initialization segment use case.
-    ## The segment task list to be canceled is obtained from the local file local file data/upload_id-concurrency number .dat written when the segment task is initialized.
+    # 每个并发顺序完成对象多段初始化->上传段->合并段
 
-##########################    "216=MultiPartsUpload"    ################################################################################################
+#############    "900=MixOperation"     ########################################################
 
-    ## Multi-segment initialization of objects in each concurrent order -> upload section -> merge section
-	
-	
-##########################    "900=MixOperation"     ################################################################################################################
-
-    ## Set the mixed operation type, you can set all the operations except 900 above.
-    ## There are dependencies between the order of operations, such as the download object depends on the upload object.
-    ## Operation model is: each user runs independently, and the following loop operations are performed in sequence, the number of loops mixLoopCount
-    ## To ensure that various services are mixed in the system at each moment, you can configure the number of operations for each operation, and increase the number of loops and the number of concurrent users.
+    # 设置混合操作类型，可设置以上除900外的所有操作。
+    # 操作顺序之间有依赖，比如下载对象依赖于上传对象。
+    # 操作模型是：每个用户独立运行，先后进行如下循环操作，循环次数mixLoopCount
+    # 为保证每一时刻系统内有各种业务混合在操作，可配置每种操作的次数，并适当加大循环次数和并发用户数。
     MixOperations = 100,101,104,201,102,202,203,204,103
-    ## Cycles
+    # 循环次数
     MixLoopCount = 10
 
-############    Advanced Configuration    ########################################################################################################################
+######    Advanced Configuration    ############################################################
 
-    ## Fixed bucket name, default is empty. If configured, all concurrent operations are performed on the bucket name.
-    ## Example: BucketNameFixed = fixedbucket-01
-    BucketNameFixed =cmcc-bucket-test
+    # 固定的桶名，默认为空。若配置，所有并发的所有操作均对该桶名进行。
+    # 示例： BucketNameFixed = fixedbucket-01
+    BucketNameFixed =
 
-    ## Fixed object name, the default is empty. If configured, all concurrent operations operate on the object name. The number of original operations does not affect.
-    ## Example: ObjectNameFixed = fixedObject-01
+    # 固定的对象名，默认为空。若配置，所有并发的所有操作均对该对象名操作。原操作的次数不影响。
+    # 示例：ObjectNameFixed = fixedObject-01
     ObjectNameFixed =
 
-    ##Authentication signature algorithm, optional AWSV2 | AWSV4 | Empty
-    ## If the server encryption function is enabled, the tool uses the AWSV4 algorithm by default.
-    ## Keep empty: Randomly request, randomly select the algorithm for each request.
+    # 鉴权签名算法,可选AWSV2 | AWSV4 | 空
+    # 若开启服务端加密功能，工具默认使用AWSV4算法。
+    # 保持为空： 按请求随机,每一次请求时随机选用算法。
     AuthAlgorithm = AWSV2
-    ## Request the Region name, which is mandatory when using the AWSV4 algorithm and the environment is configured in Multi-Region mode.
-    Region = cidc-rp-11
+    # 请求所在Region名称，当使用AWSV4算法且环境配置为多Region模式时必选。
+    Region = 
     
-    ## Whether to use a domain name. If you use a domain name, the system will get the OSC from the domain name.
-    UseDomainName = True
-    ## Whether to use the virtual host mode request, if you use the virtual host mode, you need to ensure that the domain name is configured correctly.
+    # 是否使用域名。如使用域名，系统会从域名获取OSC。
+    UseDomainName = false
+    # 是否使用虚拟主机方式请求，若使用虚拟主机方式，需要保证域名配置正确。
     VirtualHost = false
-    ## domain address
-    DomainName = obs.cidc-rp-11.joint.ecloud.10086.cn
+    # 域名地址
+    DomainName = obs.huawei.com
 
-	## Use HTTP or HTTPs request.
+    # 使用HTTP还是HTTPs请求。
+    IsHTTPs = false
+
+    # 是否使用Http2.0
+    IsHTTP2 = false
+
+    # 链接是否多路复用
+    IsShareConnection = false
     
-    ## IsHTTPs = False
-    IsHTTPs = False
- 
-  
-    #### #### ssl Protocol version number configuration, effective when IsHTTPs is True.
-    ## Optional values ​​include: TLSv1, TLSv1_1, TLSv1_2, SSLv23, SSLv2, SSLv3 (not configured by default to SSLv23)
-    ## If python version < 2.7.9, TLSv1_1, TLSv1_2 is not supported.
-    ## TLSv1 : Select TLS v1.0 protocol.
-    ## TLSv1_1 : Requires openssl version 1.0.1+, python >2.7.9
-    ## TLSv1_2 : The current security protocol. Need openssl version 1.0.1+, python >2.7.9
-    ## SSLv23: Auto-negotiate the most secure protocol.
-    ## SSLv2 : If the openssl is compiled with the OPENSSL_NO_SSL2 parameter is not available. The agreement is not secure and has been deprecated.
-    ## SSLv3 : If the openssl is compiled with the OPENSSL_NO_SSL3 parameter is not available. The agreement is not secure and has been deprecated.
+    # ssl协议版本号配置，当IsHTTPs为True时生效。
+    # 可选值包括：TLSv1, TLSv1_1, TLSv1_2,SSLv23, SSLv2, SSLv3 (不配置默认为SSLv23)
+    # 若python 版本 <  2.7.9，不支持TLSv1_1, TLSv1_2。
+    # TLSv1 : 选择TLS v1.0协议。
+    # TLSv1_1 : 需要openssl version 1.0.1+,  python >2.7.9
+    # TLSv1_2 : 当前最安全协议。需要openssl version 1.0.1+,python >2.7.9
+    # SSLv23: 自动协商最安全协议。
+    # SSLv2 : 若openssl编译时带了OPENSSL_NO_SSL2 参数不可用。该协议不安全，已不建议使用。
+    # SSLv3 : 若openssl编译时带了OPENSSL_NO_SSL3 参数不可用。该协议不安全，已不建议使用。
     
-    sslVersion =
+    sslVersion = 
     
-    ## Server-side data encryption method, if not enabled, remains empty. Optional value: SSE-KMS|SSE-C, case insensitive.
-    ## If SSE-C is configured, x-amz-server-side-encryption-customer-key uses the last 32 characters of the object name, and less than 32 is preceded by 0.
-    SrvSideEncryptType =
-    ## Specify the server encryption algorithm, which is valid only when SrvSideEncryptType is SSE-KMS. Optional: aws:kms, AES256.
+    # 服务器端数据加密方法,若不启用，保持为空。可选值：SSE-KMS|SSE-C,不区分大小写。
+    # 若配置SSE-C,x-amz-server-side-encryption-customer-key使用对象名的最后32个字符，不足32前面补0。
+    SrvSideEncryptType = 
+    # 指定服务端加密算法,仅当SrvSideEncryptType为SSE-KMS时有效。可选：aws:kms, AES256。
     SrvSideEncryptAlgorithm = aws:kms
-    ## Specify KMS master encryption key ID, valid only when SrvSideEncryptType is SSE-KMS and SrvSideEncryptAlgorithm is aws:kms. If not specified, the server uses the default ID.
-    SrvSideEncryptAWSKMSKeyId =
-    ## Specify the server to encrypt the context, which is optional.
-    SrvSideEncryptContext =
+    # 指定KMS master encryption key ID,仅当SrvSideEncryptType为SSE-KMS, SrvSideEncryptAlgorithm为aws:kms时有效。若不指定，服务端使用默认ID。
+    SrvSideEncryptAWSKMSKeyId = 
+    # 指定服务端器加密context，非必选。
+    SrvSideEncryptContext =  
 
-    ## Whether to reuse the connection. If True is configured, each user initiates a connection, and the user exits to release the connection, requesting a multiplex connection each time.
-    ## If the configuration uses a short connection, the connection is temporarily created before each request.
+    # 是否复用连接。若配置True，每个用户初始化一个连接，用户退出才释放连接，每次请求复用连接。
+    # 若配置使用短连接，每次请求前临时创建连接。
     LongConnection = true
 
-    ## http header connection value sent by the client, optional: keep-alive | close, when left empty, the tool automatically adds according to LongConnection.
+    # 客户端发送的http header connection值, 可选：keep-alive | close, 保持空时，工具自动根据LongConnection自动添加。
     ConnectionHeader =
 
-    ##Connection establishment/request wait timeout.
-    ConnectTimeout = 180
+    # 连接建立/请求等待超时时间。
+    ConnectTimeout = 30
 
-    ##Upload download whether to calculate MD5, if True, calculate the verification MD5 when the object is uploaded and downloaded and record it in result/******_detail.csv. If the data verification fails, the tool reports error code 9901.
+    #上传下载是否计算MD5，若为True,在对象上传下载时计算校验MD5并记录在result/******_detail.csv中，若数据校验失败工具报错误码9901。
     CalHashMD5 = false
 
-    ##Statistic result time period (unit: ms), according to this time period, the system gives the percentage of requests for each time period.
-    ## Best not to exceed 5 values. ##系统 will give similar statistics based on this value:
-    ## <=500(90.3%), <=1000(94.9%), <=3000(98.0%), <=10000(100.0%), >10000(0.0%)
+    # 统计结果时间段(单位：ms)，系统根据这个时间段，给出每个时间段的请求占百分比
+    # 最好不要超过5个值。#系统会根据这个值给出类似统计结果：
+    # <=500(90.3%), <=1000(94.9%), <=3000(98.0%), <=10000(100.0%), >10000(0.0%)
     LatencySections = 500,1000,3000,10000
     
-    ## Whether to record the detailed result of each request to the detail file, true|false, closing the function does not affect the performance result statistics.
+    # 是否记录每个请求的详细结果到detail文件,true|false,关闭该功能不影响性能结果统计。
     RecordDetails = true
     
-    ## Performance statistics interval (unit: s), 0 means off. The average response time for requests that are typically set to multiples.
+    # 性能统计时间间隔(单位:s)，0代表关闭。　一般设置为多倍的请求的平均响应时间。
     StatisticsInterval = 3
 
-    ## Performance statistics result contains error request, affecting statistical result items: avgLatency, tps, sendBPS, recvBPS
+    # 性能统计结果是否包含错误请求,影响统计结果项：avgLatency, tps, sendBPS, recvBPS
     BadRequestCounted = false
     
-    ## Whether to avoid multiple concurrent uploading and deleting objects in the same bucket
+    # 是否避免多并发对同一个桶进行上传、删除对象操作
     AvoidSinBkOp = true
     
-    ##Run time (seconds)
-    ## Run after the specified length of time. If the specified number of requests is not completed, the tool will also exit. If the configuration is 0, it means no configuration, that is, it will exit after completing the configured number of requests.
+    # 运行时长（秒）
+    # 运行指定时长后退出。若未到指定时长时，配置的请求数完成，工具也会退出。配置为0表示不配置，即按配置的请求数完成后退出。
     RunSeconds =
 
-    ## Limit the maximum number of requests per concurrent per second, which can be integer or floating point numbers, null and 0 means no limit.
-    ## Commonly used for requests with small response delays.
+    # 限制每并发每秒的最大请求数，可为整数或浮点数，空和0表示不限制。
+    # 常用于响应时延较小的请求。
     TpsPerThread =
 
-    ## Limit the period of each concurrent operation window, if one of them is 0 or is empty, it will not take effect.
+    # 限制每并发运行的周期窗口时间，若其中一项为0或为空则不生效
     RunWindowSeconds =
     StopWindowSeconds =
 
-    ## anonymous access, without authentication related header fields
+    # 匿名访问，不带鉴权相关的头域
     Anonymous = false
 
-    ## Whether to print real-time results and progress in the run. Closed when the tool is automatically invoked.
+    # 是否打印运行中的实时结果和进度。自动化调用工具时关闭。
     PrintProgress = true
 
-    ## Performance statistics include the delay of each request, true|false. Turning off this function does not affect performance result statistics.
-    LatencyPercentileMap = true
+    # 性能统计结果是否包含各个请求的时延，true|false，关闭该功能不影响性能结果统计，如果是长时间运行上亿对象操作，建议关闭
+    LatencyPercentileMap = false
 
-    ## is used in conjunction with LatencyPercentileMap. If the LatencyPercentileMap is true, the point of the delay change that needs to be observed can be selected according to the situation.
-    ## Current demand is 10%, 50%, 90%, 95%, 99% five points.
-    ## Example: If 1 is concurrent, each time 100 requests are uploaded for uploading objects, then 100 objects are uploaded last. The system records the delay of each request into the list, and finally sorts the above five points according to the default requirements.
-    ## Get the 10th delay after sorting, the 50th delay, 90, 95, 99.
-    ## The system will give similar statistical results xx (10%), xx (50%), xx (90%), xx (95%), xx (99%) based on this value.
+    # 和LatencyPercentileMap联合使用，如果LatencyPercentileMap为true，根据情况可选定需要观察的时延变化的点。
+    # 目前需求是10%, 50%, 90%, 95%, 99%五个点。
+    # 举例说明：若1并发，每并发100请求数上传对象，那最后上传100对象。系统将每个请求的时延记录到列表中，最后排序，根据默认需求取上述五个点
+    # 得到的即是排序后的第10个时延，第50个时延，90个，95个，99个。
+    # 系统会根据这个值给出类似统计结果xx(10%),xx(50%),xx(90%),xx(95%),xx(99%)
     LatencyPercentileMapSections = 10,50,90,95,99
 
-    ## Performance statistics result includes the number of delay requests, true|false
+    # 性能统计结果是否包含各个时延段请求数，true|false
     LatencyRequestsNumber = false
 
-    ##Maximum delay and minimum delay are taken as 10
+    # 最大时延和最小时延的差值取10份
     LatencyRequestsNumberSections = 20
 
-    ## Whether to generate the HashId by ProcessName-ObjectNamePrefix-Index from ObjectNamePattern, and generate ObjectNamePattern = HashId-ProcessID-ObjectNamePrefix-Index
+    # 是否将ObjectNamePattern通过ProcessID-ObjectNamePrefix-Index产生HashId，产生后的 ObjectNamePattern = HashId-ProcessID-ObjectNamePrefix-Index
     ObjNamePatternHash = true
 
-    ## Whether you only need to print basic data, to reduce the main thread cpu occupation
+    # 是否只需要打印基本数据，为减少主线程cpu占用
     CollectBasicData = false
 
-    ## Run the mode of the obsPyTool tool (default is 1)
-    ## Mode = 1: Integrated (runs like in the past)
-    ## Mode = 2: Distributed (need to configure the distribute_config.dat file)
-    ## If it is the master server, IsMaster = true
-    ## If it is a child server, IsMaster = false
-	Mode = 1
+    # 是否在业务过程中通过curl进行网络检查
+    TestNetwork = false
+
+    # 运行obsPyTool工具的模式（默认为1）
+    # Mode = 1: 集成式（像过去一样运行）
+    # Mode = 2: 分布式（需要配置distribute_config.dat文件）
+    # 如果是主控服务器，IsMaster = true
+    # 如果是子服务器，IsMaster = false
+    Mode = 1
     IsMaster = false

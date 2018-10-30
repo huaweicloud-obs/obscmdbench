@@ -422,6 +422,9 @@ class ResultWriter(Process):
         self.lastUpdateTime = time.time()
         if self.config['PrintProgress']:
             self.print_progress()
+        else:
+            run_time_origin = self.lastUpdateTime - self.valid_start_time.value
+            self.accurate_summary_dict['runTime'] = run_time_origin
 
     def print_progress(self):
         if self.currentThreads.value == -2:
@@ -626,7 +629,7 @@ class ResultWriter(Process):
             return "%.2f B" % size_bt
 
     def generate_write_final_result(self):
-        logging.debug('generate_write_final_result enter')
+        logging.warn('generate_write_final_result enter')
 
         if self.config['LatencyPercentileMap'] and self.progressLatency is not None and len(self.progressLatency) > 0:
             self.generate_latency_percentile_map_description()

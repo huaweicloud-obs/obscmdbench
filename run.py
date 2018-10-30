@@ -5,6 +5,7 @@ import os
 import time
 import math
 import random
+import commands
 import logging
 import logging.config
 import datetime
@@ -20,8 +21,9 @@ import string
 from constant import Mode
 from constant import Role
 import threading
+import urllib
 
-VERSION = '-------------------obscmdbench: v2.2.1, Python: %s-------------------\n' % sys.version.split(' ')[0]
+VERSION = '-------------------obscmdbench: v3.1.7, Python: %s-------------------\n' % sys.version.split(' ')[0]
 valid_start_time = None
 
 
@@ -90,8 +92,8 @@ def read_config(config_file='config.dat'):
         CONFIG['Threads'] = CONFIG['Users'] * CONFIG['ThreadsPerUser']
         CONFIG['RequestsPerThread'] = int(CONFIG['RequestsPerThread'])
         CONFIG['BucketsPerUser'] = int(CONFIG['BucketsPerUser'])
-        if CONFIG['copyDstObjFiexed'] and '/' not in CONFIG['copyDstObjFiexed']:
-            CONFIG['copyDstObjFiexed'] = ''
+        if CONFIG['copyDstObjFixed'] and '/' not in CONFIG['copyDstObjFixed']:
+            CONFIG['copyDstObjFixed'] = ''
         if CONFIG['copySrcObjFixed'] and '/' not in CONFIG['copySrcObjFixed']:
             CONFIG['copySrcObjFixed'] = ''
         CONFIG['ObjectsPerBucketPerThread'] = int(CONFIG['ObjectsPerBucketPerThread'])
@@ -178,10 +180,55 @@ def read_config(config_file='config.dat'):
             CONFIG['WindowTime'] = CONFIG['StopWindowSeconds'] + CONFIG['RunWindowSeconds']
         else:
             CONFIG['WindowMode'] = False
+        if CONFIG['GetPositionFromMeta'].lower() == 'true':
+            CONFIG['GetPositionFromMeta'] = True
+        else:
+            CONFIG['GetPositionFromMeta'] = False
+
+        if CONFIG['IsDataFromFile'].lower() == 'true':
+            CONFIG['IsDataFromFile'] = True
+            if CONFIG['LocalFilePath'] is None or not CONFIG['LocalFilePath']:
+                raise Exception('local file path is not provided.')
+        else:
+            CONFIG['IsDataFromFile'] = False
+            CONFIG['LocalFilePath'] = None
+
+        if CONFIG['IsCdn'].lower() == 'true':
+            CONFIG['IsCdn'] = True
+            if not CONFIG['CdnAK'] or not CONFIG['CdnSK'] or CONFIG['CdnSTSToken']:
+                raise Exception('cdn ak or sk or stsToken is not provided.')
+        else:
+            CONFIG['IsCdn'] = False
+
+        if CONFIG['IsHTTP2'].lower() == 'true':
+            CONFIG['IsHTTP2'] = True
+        else:
+            CONFIG['IsHTTP2'] = False
+
+        if CONFIG['TestNetwork'].lower() == 'true':
+            CONFIG['TestNetwork'] = True
+        else:
+            CONFIG['TestNetwork'] = False
+        if CONFIG['IsShareConnection'].lower() == 'true':
+            CONFIG['IsShareConnection'] = True
+        else:
+            CONFIG['IsShareConnection'] = False
+
+        if CONFIG['IsFileInterface'].lower() == 'true':
+            CONFIG['IsFileInterface'] = True
+        else:
+            CONFIG['IsFileInterface'] = False
 
         if not ('processID' in CONFIG['ObjectNamePartten'] and 'ObjectNamePrefix' in CONFIG[
             'ObjectNamePartten'] and 'Index' in CONFIG['ObjectNamePartten']):
             raise Exception('both of processID,Index,ObjectNamePartten should be in config ObjectNamePartten')
+
+        if CONFIG['IsDataFromFile'] and CONFIG['CalHashMD5']:
+            raise Exception('IsDataFromFile and CalHashMD5 can not be true at the same time.')
+
+        if CONFIG['IsHttp2']:
+            print '[Attention] currently, http2 is not stable in this test tool, make sure you have already set CalHashMD5 = false'
+
     except Exception, e:
         print '[ERROR] Read config file %s error: %s' % (config_file, e)
         sys.exit()
@@ -242,20 +289,68 @@ def create_file_in_memory():
     return f
 
 
+def generate_append_object_position():
+    global CONFIG
+
+    lines = []
+    for i in range(int(CONFIG['ThreadsPerUser'])):
+        bucket_name = CONFIG['BucketNameFixed']
+        object_name = CONFIG['ObjectNamePrefix']
+        obj_file = 'position/%s-%s-%s.dat' % (bucket_name, object_name, str(i))
+        if os.path.exists(obj_file) and os.path.getsize(obj_file) > 0:
+            logging.debug("read object from file: [%s] done." % obj_file)
+            tmp = [tuple(map(str, line.rstrip('\n')[1:-1].split(','))) for line in open(obj_file, 'r')]
+            lines.extend(tmp)
+        else:
+            logging.debug("file: [%s] does not exist. please check." % obj_file)
+            return
+
+    logging.debug("[%d] objects detected." % len(lines))
+
+    return dict(lines)
+
+
+def generate_image_process_parameters():
+    global CONFIG
+
+    if CONFIG['ImageManipulationType'] is not None and CONFIG['ImageManipulationType']:
+        # CONFIG['x-image-process'] = 'image'
+        params = ''
+        if 'format' in CONFIG['ImageManipulationType'] and CONFIG['ImageFormat'] is not None and CONFIG['ImageFormat']:
+            params = params + '/format,' + CONFIG['IamgeFormat']
+        if 'resize' in CONFIG['ImageManipulationType'] and CONFIG['ResizeParams'] is not None and CONFIG['ResizeParams']:
+            params = params + '/resize,' + CONFIG['ResizeParams']
+        if 'crop' in CONFIG['ImageManipulationType'] and CONFIG['CropParams'] is not None and CONFIG['CropParams']:
+            params = params + '/crop,' + CONFIG['CropParams']
+        if 'info' in CONFIG['ImageManipulationType']:
+            params = params + '/info'
+
+        if params:
+            CONFIG['x-image-process'] = 'image%s' % params
+            logging.debug('image process param is: [%s]' % CONFIG['x-image-process'])
+        else:
+            raise Exception('ImageManipulationType or other parameters config is not correct.')
+    else:
+        raise Exception('ImageManipulationType or other parameters config is not correct.')
+
+
 def list_user_buckets(process_id, user, conn, result_queue):
     request_type = 'ListUserBuckets'
     rest = obsPyCmd.OBSRequestDescriptor(request_type, ak=user.ak, sk=user.sk,
                                          auth_algorithm=CONFIG['AuthAlgorithm'], virtual_host=CONFIG['VirtualHost'],
-                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'])
+                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'],
+                                         is_http2=CONFIG['IsHTTP2'], host=conn.host)
+    start_time = None
     if CONFIG['TpsPerThread']:
-        startTime = time.time()  # 开始时间
+        start_time = time.time()  # 开始时间
     i = 0
     while i < CONFIG['RequestsPerThread']:
         if CONFIG['TpsPerThread']:  # 限制tps
             # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求/限制TPS +　并发开始时间
-            dstTime = i * 1.0 / CONFIG['TpsPerThread'] + startTime
-            waitTime = dstTime - time.time()
-            if waitTime > 0:  time.sleep(waitTime)
+            dst_time = i * 1.0 / CONFIG['TpsPerThread'] + start_time
+            wait_time = dst_time - time.time()
+            if wait_time > 0:
+                time.sleep(wait_time)
         i += 1
         resp = obsPyCmd.OBSRequestHandler(rest, conn).make_request()
         result_queue.put(
@@ -273,7 +368,7 @@ def create_bucket(process_id, user, conn, result_queue):
     rest = obsPyCmd.OBSRequestDescriptor(request_type, ak=user.ak, sk=user.sk,
                                          auth_algorithm=CONFIG['AuthAlgorithm'], send_content=send_content,
                                          virtual_host=CONFIG['VirtualHost'], domain_name=CONFIG['DomainName'],
-                                         region=CONFIG['Region'])
+                                         region=CONFIG['Region'], is_http2=CONFIG['IsHTTP2'], host=conn.host)
     if CONFIG['CreateWithACL']:
         rest.headers['x-amz-acl'] = CONFIG['CreateWithACL']
     if CONFIG['StorageClass']:
@@ -286,18 +381,23 @@ def create_bucket(process_id, user, conn, result_queue):
             rest.headers['x-default-storage-class'] = CONFIG['StorageClass']
     if CONFIG['BucketNameFixed']:
         rest.bucket = CONFIG['BucketNameFixed']
+    if CONFIG['IsFileInterface']:
+        rest.headers['x-obs-fs-file-interface'] = "Enabled"
+
+    start_time = None
     if CONFIG['TpsPerThread']:
-        startTime = time.time()  # 开始时间
+        start_time = time.time()  # 开始时间
     i = 0
     while i < CONFIG['BucketsPerUser']:
         if not CONFIG['BucketNameFixed']:
             rest.bucket = '%s.%s.%d' % (user.ak.lower(), CONFIG['BucketNamePrefix'], i)
         if CONFIG['TpsPerThread']:  # 限制tps
             # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求 / 限制TPS + 并发开始时间
-            dstTime = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
-                'TpsPerThread'] + startTime
-            waitTime = dstTime - time.time()
-            if waitTime > 0:  time.sleep(waitTime)
+            dst_time = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
+                'TpsPerThread'] + start_time
+            wait_time = dst_time - time.time()
+            if wait_time > 0:
+                time.sleep(wait_time)
         i += 1
         resp = obsPyCmd.OBSRequestHandler(rest, conn).make_request()
         result_queue.put(
@@ -309,14 +409,17 @@ def list_objects_in_bucket(process_id, user, conn, result_queue):
     request_type = 'ListObjectsInBucket'
     rest = obsPyCmd.OBSRequestDescriptor(request_type, ak=user.ak, sk=user.sk,
                                          auth_algorithm=CONFIG['AuthAlgorithm'], virtual_host=CONFIG['VirtualHost'],
-                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'])
+                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'],
+                                         is_http2=CONFIG['IsHTTP2'], host=conn.host)
     rest.queryArgs['max-keys'] = CONFIG['Max-keys']
+    if CONFIG.__contains__('prefix') and CONFIG['prefix']:
+        rest.queryArgs['prefix'] = CONFIG['prefix']
     i = 0
     if CONFIG['BucketNameFixed']:
         rest.bucket = CONFIG['BucketNameFixed']
     if CONFIG['TpsPerThread']:
-        startTime = time.time()  # 开始时间
-    totalRequests = 0
+        start_time = time.time()  # 开始时间
+    total_requests = 0
     while i < CONFIG['BucketsPerUser']:
         if not CONFIG['BucketNameFixed']:
             rest.bucket = '%s.%s.%d' % (user.ak.lower(), CONFIG['BucketNamePrefix'], i)
@@ -325,11 +428,12 @@ def list_objects_in_bucket(process_id, user, conn, result_queue):
         while marker is not None:
             if CONFIG['TpsPerThread']:  # 限制tps
                 # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求 / 限制TPS + 并发开始时间
-                dstTime = totalRequests * 1.0 / CONFIG['TpsPerThread'] + startTime
-                waitTime = dstTime - time.time()
-                if waitTime > 0:  time.sleep(waitTime)
-            totalRequests += 1
-            rest.queryArgs['marker'] = marker
+                dst_time = total_requests * 1.0 / CONFIG['TpsPerThread'] + start_time
+                wait_time = dst_time - time.time()
+                if wait_time > 0:
+                    time.sleep(wait_time)
+            total_requests += 1
+            rest.queryArgs['marker'] = urllib.unquote_plus(marker)
             resp = obsPyCmd.OBSRequestHandler(rest, conn).make_request()
             marker = resp.return_data
             result_queue.put(
@@ -341,19 +445,21 @@ def head_bucket(process_id, user, conn, result_queue):
     request_type = 'HeadBucket'
     rest = obsPyCmd.OBSRequestDescriptor(request_type, ak=user.ak, sk=user.sk,
                                          auth_algorithm=CONFIG['AuthAlgorithm'], virtual_host=CONFIG['VirtualHost'],
-                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'])
+                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'],
+                                         is_http2=CONFIG['IsHTTP2'], host=conn.host)
     i = process_id % CONFIG['ThreadsPerUser']
     if CONFIG['BucketNameFixed']:
         rest.bucket = CONFIG['BucketNameFixed']
     if CONFIG['TpsPerThread']:
-        startTime = time.time()  # 开始时间
+        start_time = time.time()  # 开始时间
     while i < CONFIG['BucketsPerUser']:
         if CONFIG['TpsPerThread']:  # 限制tps
             # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求 / 限制TPS + 并发开始时间
-            dstTime = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
-                'TpsPerThread'] + startTime
-            waitTime = dstTime - time.time()
-            if waitTime > 0:  time.sleep(waitTime)
+            dst_time = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
+                'TpsPerThread'] + start_time
+            wait_time = dst_time - time.time()
+            if wait_time > 0:
+                time.sleep(wait_time)
         if not CONFIG['BucketNameFixed']:
             rest.bucket = '%s.%s.%d' % (user.ak.lower(), CONFIG['BucketNamePrefix'], i)
         i += CONFIG['ThreadsPerUser']
@@ -367,19 +473,21 @@ def delete_bucket(process_id, user, conn, result_queue):
     request_type = 'DeleteBucket'
     rest = obsPyCmd.OBSRequestDescriptor(request_type, ak=user.ak, sk=user.sk,
                                          auth_algorithm=CONFIG['AuthAlgorithm'], virtual_host=CONFIG['VirtualHost'],
-                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'])
+                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'],
+                                         is_http2=CONFIG['IsHTTP2'], host=conn.host)
     i = process_id % CONFIG['ThreadsPerUser']
     if CONFIG['BucketNameFixed']:
         rest.bucket = CONFIG['BucketNameFixed']
     if CONFIG['TpsPerThread']:
-        startTime = time.time()  # 开始时间
+        start_time = time.time()  # 开始时间
     while i < CONFIG['BucketsPerUser']:
         if CONFIG['TpsPerThread']:  # 限制tps
             # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求 / 限制TPS + 并发开始时间
-            dstTime = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
-                'TpsPerThread'] + startTime
-            waitTime = dstTime - time.time()
-            if waitTime > 0:  time.sleep(waitTime)
+            dst_time = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
+                'TpsPerThread'] + start_time
+            wait_time = dst_time - time.time()
+            if wait_time > 0:
+                time.sleep(wait_time)
         if not CONFIG['BucketNameFixed']:
             rest.bucket = '%s.%s.%d' % (user.ak.lower(), CONFIG['BucketNamePrefix'], i)
         i += CONFIG['ThreadsPerUser']
@@ -393,20 +501,22 @@ def bucket_delete(process_id, user, conn, result_queue):
     request_type = 'BucketDelete'
     rest = obsPyCmd.OBSRequestDescriptor(request_type, ak=user.ak, sk=user.sk,
                                          auth_algorithm=CONFIG['AuthAlgorithm'], virtual_host=CONFIG['VirtualHost'],
-                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'])
+                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'],
+                                         is_http2=CONFIG['IsHTTP2'], host=conn.host)
     rest.queryArgs['deletebucket'] = None
     i = process_id % CONFIG['ThreadsPerUser']
     if CONFIG['BucketNameFixed']:
         rest.bucket = CONFIG['BucketNameFixed']
     if CONFIG['TpsPerThread']:
-        startTime = time.time()  # 开始时间
+        start_time = time.time()  # 开始时间
     while i < CONFIG['BucketsPerUser']:
         if CONFIG['TpsPerThread']:  # 限制tps
             # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求 / 限制TPS + 并发开始时间
-            dstTime = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
-                'TpsPerThread'] + startTime
-            waitTime = dstTime - time.time()
-            if waitTime > 0:  time.sleep(waitTime)
+            dst_time = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
+                'TpsPerThread'] + start_time
+            wait_time = dst_time - time.time()
+            if wait_time > 0:
+                time.sleep(wait_time)
         if not CONFIG['BucketNameFixed']:
             rest.bucket = '%s.%s.%d' % (user.ak.lower(), CONFIG['BucketNamePrefix'], i)
         i += CONFIG['ThreadsPerUser']
@@ -421,7 +531,8 @@ def options_bucket(process_id, user, conn, result_queue):
     request_type = 'OPTIONSBucket'
     rest = obsPyCmd.OBSRequestDescriptor(request_type, ak=user.ak, sk=user.sk,
                                          auth_algorithm=CONFIG['AuthAlgorithm'], virtual_host=CONFIG['VirtualHost'],
-                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'])
+                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'],
+                                         is_http2=CONFIG['IsHTTP2'], host=conn.host)
     if CONFIG['AllowedMethod']:
         if ',' in CONFIG['AllowedMethod']:
             rest.headers['Access-Control-Request-Method'] = []
@@ -435,15 +546,16 @@ def options_bucket(process_id, user, conn, result_queue):
     if CONFIG['BucketNameFixed']:
         rest.bucket = CONFIG['BucketNameFixed']
     if CONFIG['TpsPerThread']:
-        startTime = time.time()  # 开始时间
+        start_time = time.time()  # 开始时间
     rest.headers['Origin'] = CONFIG['DomainName']
     while i < CONFIG['BucketsPerUser']:
         if CONFIG['TpsPerThread']:  # 限制tps
             # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求 / 限制TPS + 并发开始时间
-            dstTime = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
-                'TpsPerThread'] + startTime
-            waitTime = dstTime - time.time()
-            if waitTime > 0:  time.sleep(waitTime)
+            dst_time = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
+                'TpsPerThread'] + start_time
+            wait_time = dst_time - time.time()
+            if wait_time > 0:
+                time.sleep(wait_time)
         if not CONFIG['BucketNameFixed']:
             rest.bucket = '%s.%s.%d' % (user.ak.lower(), CONFIG['BucketNamePrefix'], i)
         i += CONFIG['ThreadsPerUser']
@@ -457,7 +569,7 @@ def put_bucket_versioning(process_id, user, conn, result_queue):
     request_type = 'PutBucketVersioning'
     rest = obsPyCmd.OBSRequestDescriptor(request_type, ak=user.ak, sk=user.sk, auth_algorithm=CONFIG['AuthAlgorithm'],
                                          virtual_host=CONFIG['VirtualHost'], domain_name=CONFIG['DomainName'],
-                                         region=CONFIG['Region'])
+                                         region=CONFIG['Region'], is_http2=CONFIG['IsHTTP2'], host=conn.host)
     rest.queryArgs['versioning'] = None
     rest.sendContent = '<VersioningConfiguration><Status>%s</Status></VersioningConfiguration>' % CONFIG[
         'VersionStatus']
@@ -466,14 +578,15 @@ def put_bucket_versioning(process_id, user, conn, result_queue):
     if CONFIG['BucketNameFixed']:
         rest.bucket = CONFIG['BucketNameFixed']
     if CONFIG['TpsPerThread']:
-        startTime = time.time()  # 开始时间
+        start_time = time.time()  # 开始时间
     while i < CONFIG['BucketsPerUser']:
         if CONFIG['TpsPerThread']:  # 限制tps
             # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求 / 限制TPS + 并发开始时间
-            dstTime = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
-                'TpsPerThread'] + startTime
-            waitTime = dstTime - time.time()
-            if waitTime > 0:  time.sleep(waitTime)
+            dst_time = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
+                'TpsPerThread'] + start_time
+            wait_time = dst_time - time.time()
+            if wait_time > 0:
+                time.sleep(wait_time)
         if not CONFIG['BucketNameFixed']:
             rest.bucket = '%s.%s.%d' % (user.ak.lower(), CONFIG['BucketNamePrefix'], i)
             logging.info('bucket:' + rest.bucket)
@@ -488,20 +601,24 @@ def get_bucket_versioning(process_id, user, conn, result_queue):
     request_type = 'GetBucketVersioning'
     rest = obsPyCmd.OBSRequestDescriptor(request_type, ak=user.ak, sk=user.sk,
                                          auth_algorithm=CONFIG['AuthAlgorithm'], virtual_host=CONFIG['VirtualHost'],
-                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'])
+                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'],
+                                         is_http2=CONFIG['IsHTTP2'], host=conn.host)
     rest.queryArgs['versioning'] = None
     i = process_id % CONFIG['ThreadsPerUser']
     if CONFIG['BucketNameFixed']:
         rest.bucket = CONFIG['BucketNameFixed']
+
+    start_time = None
     if CONFIG['TpsPerThread']:
-        startTime = time.time()  # 开始时间
+        start_time = time.time()  # 开始时间
     while i < CONFIG['BucketsPerUser']:
         if CONFIG['TpsPerThread']:  # 限制tps
             # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求 / 限制TPS + 并发开始时间
-            dstTime = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
-                'TpsPerThread'] + startTime
-            waitTime = dstTime - time.time()
-            if waitTime > 0:  time.sleep(waitTime)
+            dst_time = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
+                'TpsPerThread'] + start_time
+            wait_time = dst_time - time.time()
+            if wait_time > 0:
+                time.sleep(wait_time)
         if not CONFIG['BucketNameFixed']:
             rest.bucket = '%s.%s.%d' % (user.ak.lower(), CONFIG['BucketNamePrefix'], i)
         i += CONFIG['ThreadsPerUser']
@@ -515,20 +632,23 @@ def put_bucket_website(process_id, user, conn, result_queue):
     request_type = 'PutBucketWebsite'
     rest = obsPyCmd.OBSRequestDescriptor(request_type, ak=user.ak, sk=user.sk,
                                          auth_algorithm=CONFIG['AuthAlgorithm'], virtual_host=CONFIG['VirtualHost'],
-                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'])
+                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'],
+                                         is_http2=CONFIG['IsHTTP2'], host=conn.host)
     rest.queryArgs['website'] = None
     i = process_id % CONFIG['ThreadsPerUser']
     if CONFIG['BucketNameFixed']:
         rest.bucket = CONFIG['BucketNameFixed']
+    start_time = None
     if CONFIG['TpsPerThread']:
-        startTime = time.time()  # 开始时间
+        start_time = time.time()  # 开始时间
     while i < CONFIG['BucketsPerUser']:
         if CONFIG['TpsPerThread']:  # 限制tps
             # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求 / 限制TPS + 并发开始时间
-            dstTime = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
-                'TpsPerThread'] + startTime
-            waitTime = dstTime - time.time()
-            if waitTime > 0:  time.sleep(waitTime)
+            dst_time = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
+                'TpsPerThread'] + start_time
+            wait_time = dst_time - time.time()
+            if wait_time > 0:
+                time.sleep(wait_time)
         if not CONFIG['BucketNameFixed']:
             rest.bucket = '%s.%s.%d' % (user.ak.lower(), CONFIG['BucketNamePrefix'], i)
         i += CONFIG['ThreadsPerUser']
@@ -544,20 +664,23 @@ def get_bucket_website(process_id, user, conn, result_queue):
     request_type = 'GetBucketWebsite'
     rest = obsPyCmd.OBSRequestDescriptor(request_type, ak=user.ak, sk=user.sk,
                                          auth_algorithm=CONFIG['AuthAlgorithm'], virtual_host=CONFIG['VirtualHost'],
-                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'])
+                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'],
+                                         is_http2=CONFIG['IsHTTP2'], host=conn.host)
     rest.queryArgs['website'] = None
     i = process_id % CONFIG['ThreadsPerUser']
     if CONFIG['BucketNameFixed']:
         rest.bucket = CONFIG['BucketNameFixed']
+    start_time = None
     if CONFIG['TpsPerThread']:
-        startTime = time.time()  # 开始时间
+        start_time = time.time()  # 开始时间
     while i < CONFIG['BucketsPerUser']:
         if CONFIG['TpsPerThread']:  # 限制tps
             # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求 / 限制TPS + 并发开始时间
-            dstTime = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
-                'TpsPerThread'] + startTime
-            waitTime = dstTime - time.time()
-            if waitTime > 0:  time.sleep(waitTime)
+            dst_time = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
+                'TpsPerThread'] + start_time
+            wait_time = dst_time - time.time()
+            if wait_time > 0:
+                time.sleep(wait_time)
         if not CONFIG['BucketNameFixed']:
             rest.bucket = '%s.%s.%d' % (user.ak.lower(), CONFIG['BucketNamePrefix'], i)
         i += CONFIG['ThreadsPerUser']
@@ -571,20 +694,23 @@ def delete_bucket_website(process_id, user, conn, result_queue):
     request_type = 'DeleteBucketWebsite'
     rest = obsPyCmd.OBSRequestDescriptor(request_type, ak=user.ak, sk=user.sk,
                                          auth_algorithm=CONFIG['AuthAlgorithm'], virtual_host=CONFIG['VirtualHost'],
-                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'])
+                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'],
+                                         is_http2=CONFIG['IsHTTP2'], host=conn.host)
     rest.queryArgs['website'] = None
     i = process_id % CONFIG['ThreadsPerUser']
     if CONFIG['BucketNameFixed']:
         rest.bucket = CONFIG['BucketNameFixed']
+    start_time = None
     if CONFIG['TpsPerThread']:
-        startTime = time.time()  # 开始时间
+        start_time = time.time()  # 开始时间
     while i < CONFIG['BucketsPerUser']:
         if CONFIG['TpsPerThread']:  # 限制tps
             # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求 / 限制TPS + 并发开始时间
-            dstTime = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
-                'TpsPerThread'] + startTime
-            waitTime = dstTime - time.time()
-            if waitTime > 0:  time.sleep(waitTime)
+            dst_time = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
+                'TpsPerThread'] + start_time
+            wait_time = dst_time - time.time()
+            if wait_time > 0:
+                time.sleep(wait_time)
         if not CONFIG['BucketNameFixed']:
             rest.bucket = '%s.%s.%d' % (user.ak.lower(), CONFIG['BucketNamePrefix'], i)
         i += CONFIG['ThreadsPerUser']
@@ -600,7 +726,8 @@ def put_bucket_cors(process_id, user, conn, result_queue):
     request_type = 'PutBucketCORS'
     rest = obsPyCmd.OBSRequestDescriptor(request_type, ak=user.ak, sk=user.sk,
                                          auth_algorithm=CONFIG['AuthAlgorithm'], virtual_host=CONFIG['VirtualHost'],
-                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'])
+                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'],
+                                         is_http2=CONFIG['IsHTTP2'], host=conn.host)
     rest.queryArgs['cors'] = None
     allow_method = ''
     if CONFIG['AllowedMethod']:
@@ -618,15 +745,17 @@ def put_bucket_cors(process_id, user, conn, result_queue):
     i = process_id % CONFIG['ThreadsPerUser']
     if CONFIG['BucketNameFixed']:
         rest.bucket = CONFIG['BucketNameFixed']
+    start_time = None
     if CONFIG['TpsPerThread']:
-        startTime = time.time()  # 开始时间
+        start_time = time.time()  # 开始时间
     while i < CONFIG['BucketsPerUser']:
         if CONFIG['TpsPerThread']:  # 限制tps
             # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求 / 限制TPS + 并发开始时间
-            dstTime = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
-                'TpsPerThread'] + startTime
-            waitTime = dstTime - time.time()
-            if waitTime > 0:  time.sleep(waitTime)
+            dst_time = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
+                'TpsPerThread'] + start_time
+            wait_time = dst_time - time.time()
+            if wait_time > 0:
+                time.sleep(wait_time)
         if not CONFIG['BucketNameFixed']:
             rest.bucket = '%s.%s.%d' % (user.ak.lower(), CONFIG['BucketNamePrefix'], i)
         i += CONFIG['ThreadsPerUser']
@@ -640,20 +769,23 @@ def get_bucket_cors(process_id, user, conn, result_queue):
     request_type = 'GetBucketCORS'
     rest = obsPyCmd.OBSRequestDescriptor(request_type, ak=user.ak, sk=user.sk,
                                          auth_algorithm=CONFIG['AuthAlgorithm'], virtual_host=CONFIG['VirtualHost'],
-                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'])
+                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'],
+                                         is_http2=CONFIG['IsHTTP2'], host=conn.host)
     rest.queryArgs['cors'] = None
     i = process_id % CONFIG['ThreadsPerUser']
     if CONFIG['BucketNameFixed']:
         rest.bucket = CONFIG['BucketNameFixed']
+    start_time = None
     if CONFIG['TpsPerThread']:
-        startTime = time.time()  # 开始时间
+        start_time = time.time()  # 开始时间
     while i < CONFIG['BucketsPerUser']:
         if CONFIG['TpsPerThread']:  # 限制tps
             # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求 / 限制TPS + 并发开始时间
-            dstTime = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
-                'TpsPerThread'] + startTime
-            waitTime = dstTime - time.time()
-            if waitTime > 0:  time.sleep(waitTime)
+            dst_time = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
+                'TpsPerThread'] + start_time
+            wait_time = dst_time - time.time()
+            if wait_time > 0:
+                time.sleep(wait_time)
         if not CONFIG['BucketNameFixed']:
             rest.bucket = '%s.%s.%d' % (user.ak.lower(), CONFIG['BucketNamePrefix'], i)
         i += CONFIG['ThreadsPerUser']
@@ -667,20 +799,23 @@ def delete_bucket_cors(process_id, user, conn, result_queue):
     request_type = 'DeleteBucketCORS'
     rest = obsPyCmd.OBSRequestDescriptor(request_type, ak=user.ak, sk=user.sk,
                                          auth_algorithm=CONFIG['AuthAlgorithm'], virtual_host=CONFIG['VirtualHost'],
-                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'])
+                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'],
+                                         is_http2=CONFIG['IsHTTP2'], host=conn.host)
     rest.queryArgs['cors'] = None
     i = process_id % CONFIG['ThreadsPerUser']
     if CONFIG['BucketNameFixed']:
         rest.bucket = CONFIG['BucketNameFixed']
+    start_time = None
     if CONFIG['TpsPerThread']:
-        startTime = time.time()  # 开始时间
+        start_time = time.time()  # 开始时间
     while i < CONFIG['BucketsPerUser']:
         if CONFIG['TpsPerThread']:  # 限制tps
             # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求 / 限制TPS + 并发开始时间
-            dstTime = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
-                'TpsPerThread'] + startTime
-            waitTime = dstTime - time.time()
-            if waitTime > 0:  time.sleep(waitTime)
+            dst_time = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
+                'TpsPerThread'] + start_time
+            wait_time = dst_time - time.time()
+            if wait_time > 0:
+                time.sleep(wait_time)
         if not CONFIG['BucketNameFixed']:
             rest.bucket = '%s.%s.%d' % (user.ak.lower(), CONFIG['BucketNamePrefix'], i)
         i += CONFIG['ThreadsPerUser']
@@ -705,7 +840,8 @@ def put_bucket_tag(process_id, user, conn, result_queue):
     request_type = 'PutBucketTag'
     rest = obsPyCmd.OBSRequestDescriptor(request_type, ak=user.ak, sk=user.sk,
                                          auth_algorithm=CONFIG['AuthAlgorithm'], virtual_host=CONFIG['VirtualHost'],
-                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'])
+                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'],
+                                         is_http2=CONFIG['IsHTTP2'], host=conn.host)
     rest.queryArgs['tagging'] = None
     key_values = 1
     if CONFIG['KeyValueNumber'] and int(CONFIG['KeyValueNumber']) <= 10:
@@ -720,15 +856,17 @@ def put_bucket_tag(process_id, user, conn, result_queue):
     i = process_id % CONFIG['ThreadsPerUser']
     if CONFIG['BucketNameFixed']:
         rest.bucket = CONFIG['BucketNameFixed']
+    start_time = None
     if CONFIG['TpsPerThread']:
-        startTime = time.time()  # 开始时间
+        start_time = time.time()  # 开始时间
     while i < CONFIG['BucketsPerUser']:
         if CONFIG['TpsPerThread']:  # 限制tps
             # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求 / 限制TPS + 并发开始时间
-            dstTime = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
-                'TpsPerThread'] + startTime
-            waitTime = dstTime - time.time()
-            if waitTime > 0:  time.sleep(waitTime)
+            dst_time = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
+                'TpsPerThread'] + start_time
+            wait_time = dst_time - time.time()
+            if wait_time > 0:
+                time.sleep(wait_time)
         if not CONFIG['BucketNameFixed']:
             rest.bucket = '%s.%s.%d' % (user.ak.lower(), CONFIG['BucketNamePrefix'], i)
         i += CONFIG['ThreadsPerUser']
@@ -742,21 +880,24 @@ def get_bucket_tag(process_id, user, conn, result_queue):
     request_type = 'GetBucketTag'
     rest = obsPyCmd.OBSRequestDescriptor(request_type, ak=user.ak, sk=user.sk,
                                          auth_algorithm=CONFIG['AuthAlgorithm'], virtual_host=CONFIG['VirtualHost'],
-                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'])
+                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'],
+                                         is_http2=CONFIG['IsHTTP2'], host=conn.host)
     rest.queryArgs['tagging'] = None
     i = process_id % CONFIG['ThreadsPerUser']
     if CONFIG['BucketNameFixed']:
         rest.bucket = CONFIG['BucketNameFixed']
+    start_time = None
     if CONFIG['TpsPerThread']:
-        startTime = time.time()  # 开始时间
+        start_time = time.time()  # 开始时间
 
     while i < CONFIG['BucketsPerUser']:
         if CONFIG['TpsPerThread']:  # 限制tps
             # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求 / 限制TPS + 并发开始时间
-            dstTime = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
-                'TpsPerThread'] + startTime
-            waitTime = dstTime - time.time()
-            if waitTime > 0:  time.sleep(waitTime)
+            dst_time = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
+                'TpsPerThread'] + start_time
+            wait_time = dst_time - time.time()
+            if wait_time > 0:
+                time.sleep(wait_time)
         if not CONFIG['BucketNameFixed']:
             rest.bucket = '%s.%s.%d' % (user.ak.lower(), CONFIG['BucketNamePrefix'], i)
         i += CONFIG['ThreadsPerUser']
@@ -775,16 +916,18 @@ def delete_bucket_tag(process_id, user, conn, result_queue):
     i = process_id % CONFIG['ThreadsPerUser']
     if CONFIG['BucketNameFixed']:
         rest.bucket = CONFIG['BucketNameFixed']
+    start_time = None
     if CONFIG['TpsPerThread']:
-        startTime = time.time()  # 开始时间
+        start_time = time.time()  # 开始时间
 
     while i < CONFIG['BucketsPerUser']:
         if CONFIG['TpsPerThread']:  # 限制tps
             # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求 / 限制TPS + 并发开始时间
-            dstTime = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
-                'TpsPerThread'] + startTime
-            waitTime = dstTime - time.time()
-            if waitTime > 0:  time.sleep(waitTime)
+            dst_time = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
+                'TpsPerThread'] + start_time
+            wait_time = dst_time - time.time()
+            if wait_time > 0:
+                time.sleep(wait_time)
         if not CONFIG['BucketNameFixed']:
             rest.bucket = '%s.%s.%d' % (user.ak.lower(), CONFIG['BucketNamePrefix'], i)
         i += CONFIG['ThreadsPerUser']
@@ -798,20 +941,23 @@ def get_bucket_multi_parts_upload(process_id, user, conn, result_queue):
     request_type = 'GetBucketMultiPartsUpload'
     rest = obsPyCmd.OBSRequestDescriptor(request_type, ak=user.ak, sk=user.sk,
                                          auth_algorithm=CONFIG['AuthAlgorithm'], virtual_host=CONFIG['VirtualHost'],
-                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'])
+                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'],
+                                         is_http2=CONFIG['IsHTTP2'], host=conn.host)
     rest.queryArgs['uploads'] = None
     i = process_id % CONFIG['ThreadsPerUser']
     if CONFIG['BucketNameFixed']:
         rest.bucket = CONFIG['BucketNameFixed']
+    start_time = None
     if CONFIG['TpsPerThread']:
-        startTime = time.time()  # 开始时间
+        start_time = time.time()  # 开始时间
     while i < CONFIG['BucketsPerUser']:
         if CONFIG['TpsPerThread']:  # 限制tps
             # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求 / 限制TPS + 并发开始时间
-            dstTime = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
-                'TpsPerThread'] + startTime
-            waitTime = dstTime - time.time()
-            if waitTime > 0:  time.sleep(waitTime)
+            dst_time = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
+                'TpsPerThread'] + start_time
+            wait_time = dst_time - time.time()
+            if wait_time > 0:
+                time.sleep(wait_time)
         if not CONFIG['BucketNameFixed']:
             rest.bucket = '%s.%s.%d' % (user.ak.lower(), CONFIG['BucketNamePrefix'], i)
         i += CONFIG['ThreadsPerUser']
@@ -825,20 +971,23 @@ def get_bucket_location(process_id, user, conn, result_queue):
     request_type = 'GetBucketLocation'
     rest = obsPyCmd.OBSRequestDescriptor(request_type, ak=user.ak, sk=user.sk,
                                          auth_algorithm=CONFIG['AuthAlgorithm'], virtual_host=CONFIG['VirtualHost'],
-                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'])
+                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'],
+                                         is_http2=CONFIG['IsHTTP2'], host=conn.host)
     rest.queryArgs['location'] = None
     i = process_id % CONFIG['ThreadsPerUser']
     if CONFIG['BucketNameFixed']:
         rest.bucket = CONFIG['BucketNameFixed']
+    start_time = None
     if CONFIG['TpsPerThread']:
-        startTime = time.time()  # 开始时间
+        start_time = time.time()  # 开始时间
     while i < CONFIG['BucketsPerUser']:
         if CONFIG['TpsPerThread']:  # 限制tps
             # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求 / 限制TPS + 并发开始时间
-            dstTime = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
-                'TpsPerThread'] + startTime
-            waitTime = dstTime - time.time()
-            if waitTime > 0:  time.sleep(waitTime)
+            dst_time = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
+                'TpsPerThread'] + start_time
+            wait_time = dst_time - time.time()
+            if wait_time > 0:
+                time.sleep(wait_time)
         if not CONFIG['BucketNameFixed']:
             rest.bucket = '%s.%s.%d' % (user.ak.lower(), CONFIG['BucketNamePrefix'], i)
         i += CONFIG['ThreadsPerUser']
@@ -852,7 +1001,8 @@ def put_bucket_log(process_id, user, conn, result_queue):
     request_type = 'PutBucketLog'
     rest = obsPyCmd.OBSRequestDescriptor(request_type, ak=user.ak, sk=user.sk,
                                          auth_algorithm=CONFIG['AuthAlgorithm'], virtual_host=CONFIG['VirtualHost'],
-                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'])
+                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'],
+                                         is_http2=CONFIG['IsHTTP2'], host=conn.host)
     rest.queryArgs['logging'] = None
 
     i = process_id % CONFIG['ThreadsPerUser']
@@ -863,15 +1013,17 @@ def put_bucket_log(process_id, user, conn, result_queue):
         target_bucket = '%s.%s.%d' % (user.ak.lower(), CONFIG['BucketNamePrefix'], i)
 
     rest.sendContent = '<?xml version="1.0" encoding="UTF-8"?><BucketLoggingStatus xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><LoggingEnabled><TargetBucket>%s</TargetBucket><TargetPrefix>access_log</TargetPrefix></LoggingEnabled></BucketLoggingStatus>' % target_bucket
+    start_time = None
     if CONFIG['TpsPerThread']:
-        startTime = time.time()  # 开始时间
+        start_time = time.time()  # 开始时间
     while i < CONFIG['BucketsPerUser']:
         if CONFIG['TpsPerThread']:  # 限制tps
             # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求 / 限制TPS + 并发开始时间
-            dstTime = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
-                'TpsPerThread'] + startTime
-            waitTime = dstTime - time.time()
-            if waitTime > 0:  time.sleep(waitTime)
+            dst_time = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
+                'TpsPerThread'] + start_time
+            wait_time = dst_time - time.time()
+            if wait_time > 0:
+                time.sleep(wait_time)
         if not CONFIG['BucketNameFixed']:
             rest.bucket = '%s.%s.%d' % (user.ak.lower(), CONFIG['BucketNamePrefix'], i)
         i += CONFIG['ThreadsPerUser']
@@ -885,20 +1037,23 @@ def get_bucket_log(process_id, user, conn, result_queue):
     request_type = 'GetBucketLog'
     rest = obsPyCmd.OBSRequestDescriptor(request_type, ak=user.ak, sk=user.sk,
                                          auth_algorithm=CONFIG['AuthAlgorithm'], virtual_host=CONFIG['VirtualHost'],
-                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'])
+                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'],
+                                         is_http2=CONFIG['IsHTTP2'], host=conn.host)
     rest.queryArgs['logging'] = None
     i = process_id % CONFIG['ThreadsPerUser']
     if CONFIG['BucketNameFixed']:
         rest.bucket = CONFIG['BucketNameFixed']
+    start_time = None
     if CONFIG['TpsPerThread']:
-        startTime = time.time()  # 开始时间
+        start_time = time.time()  # 开始时间
     while i < CONFIG['BucketsPerUser']:
         if CONFIG['TpsPerThread']:  # 限制tps
             # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求 / 限制TPS + 并发开始时间
-            dstTime = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
-                'TpsPerThread'] + startTime
-            waitTime = dstTime - time.time()
-            if waitTime > 0:  time.sleep(waitTime)
+            dst_time = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
+                'TpsPerThread'] + start_time
+            wait_time = dst_time - time.time()
+            if wait_time > 0:
+                time.sleep(wait_time)
         if not CONFIG['BucketNameFixed']:
             rest.bucket = '%s.%s.%d' % (user.ak.lower(), CONFIG['BucketNamePrefix'], i)
         i += CONFIG['ThreadsPerUser']
@@ -912,20 +1067,23 @@ def get_bucket_storageinfo(process_id, user, conn, result_queue):
     request_type = 'GetBucketStorageInfo'
     rest = obsPyCmd.OBSRequestDescriptor(request_type, ak=user.ak, sk=user.sk,
                                          auth_algorithm=CONFIG['AuthAlgorithm'], virtual_host=CONFIG['VirtualHost'],
-                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'])
+                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'],
+                                         is_http2=CONFIG['IsHTTP2'], host=conn.host)
     rest.queryArgs['storageinfo'] = None
     i = process_id % CONFIG['ThreadsPerUser']
     if CONFIG['BucketNameFixed']:
         rest.bucket = CONFIG['BucketNameFixed']
+    start_time = None
     if CONFIG['TpsPerThread']:
-        startTime = time.time()  # 开始时间
+        start_time = time.time()  # 开始时间
     while i < CONFIG['BucketsPerUser']:
         if CONFIG['TpsPerThread']:  # 限制tps
             # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求 / 限制TPS + 并发开始时间
-            dstTime = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
-                'TpsPerThread'] + startTime
-            waitTime = dstTime - time.time()
-            if waitTime > 0:  time.sleep(waitTime)
+            dst_time = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
+                'TpsPerThread'] + start_time
+            wait_time = dst_time - time.time()
+            if wait_time > 0:
+                time.sleep(wait_time)
         if not CONFIG['BucketNameFixed']:
             rest.bucket = '%s.%s.%d' % (user.ak.lower(), CONFIG['BucketNamePrefix'], i)
         i += CONFIG['ThreadsPerUser']
@@ -940,13 +1098,15 @@ def put_bucket_storage_quota(process_id, user, conn, result_queue):
     request_type = 'PutBucketStorageQuota'
     rest = obsPyCmd.OBSRequestDescriptor(request_type, ak=user.ak, sk=user.sk,
                                          auth_algorithm=CONFIG['AuthAlgorithm'], virtual_host=CONFIG['VirtualHost'],
-                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'])
+                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'],
+                                         is_http2=CONFIG['IsHTTP2'], host=conn.host)
     rest.queryArgs['quota'] = None
     i = process_id % CONFIG['ThreadsPerUser']
     if CONFIG['BucketNameFixed']:
         rest.bucket = CONFIG['BucketNameFixed']
+    start_time = None
     if CONFIG['TpsPerThread']:
-        startTime = time.time()  # 开始时间
+        start_time = time.time()  # 开始时间
     # if CONFIG['StorageQuota']:
     #     storagequota = int(CONFIG['StorageQuota'])
     # else:
@@ -954,10 +1114,11 @@ def put_bucket_storage_quota(process_id, user, conn, result_queue):
     while i < CONFIG['BucketsPerUser']:
         if CONFIG['TpsPerThread']:  # 限制tps
             # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求 / 限制TPS + 并发开始时间
-            dstTime = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
-                'TpsPerThread'] + startTime
-            waitTime = dstTime - time.time()
-            if waitTime > 0:  time.sleep(waitTime)
+            dst_time = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
+                'TpsPerThread'] + start_time
+            wait_time = dst_time - time.time()
+            if wait_time > 0:
+                time.sleep(wait_time)
         if not CONFIG['BucketNameFixed']:
             rest.bucket = '%s.%s.%d' % (user.ak.lower(), CONFIG['BucketNamePrefix'], i)
         i += CONFIG['ThreadsPerUser']
@@ -974,20 +1135,23 @@ def get_bucket_storage_quota(process_id, user, conn, result_queue):
     request_type = 'GetBucketStorageQuota'
     rest = obsPyCmd.OBSRequestDescriptor(request_type, ak=user.ak, sk=user.sk,
                                          auth_algorithm=CONFIG['AuthAlgorithm'], virtual_host=CONFIG['VirtualHost'],
-                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'])
+                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'],
+                                         is_http2=CONFIG['IsHTTP2'], host=conn.host)
     rest.queryArgs['quota'] = None
     i = process_id % CONFIG['ThreadsPerUser']
     if CONFIG['BucketNameFixed']:
         rest.bucket = CONFIG['BucketNameFixed']
+    start_time = None
     if CONFIG['TpsPerThread']:
-        startTime = time.time()  # 开始时间
+        start_time = time.time()  # 开始时间
     while i < CONFIG['BucketsPerUser']:
         if CONFIG['TpsPerThread']:  # 限制tps
             # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求 / 限制TPS + 并发开始时间
-            dstTime = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
-                'TpsPerThread'] + startTime
-            waitTime = dstTime - time.time()
-            if waitTime > 0:  time.sleep(waitTime)
+            dst_time = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
+                'TpsPerThread'] + start_time
+            wait_time = dst_time - time.time()
+            if wait_time > 0:
+                time.sleep(wait_time)
         if not CONFIG['BucketNameFixed']:
             rest.bucket = '%s.%s.%d' % (user.ak.lower(), CONFIG['BucketNamePrefix'], i)
         i += CONFIG['ThreadsPerUser']
@@ -1003,14 +1167,16 @@ def put_bucket_acl(process_id, user, conn, result_queue):
     request_type = 'PutBucketAcl'
     rest = obsPyCmd.OBSRequestDescriptor(request_type, ak=user.ak, sk=user.sk,
                                          auth_algorithm=CONFIG['AuthAlgorithm'], virtual_host=CONFIG['VirtualHost'],
-                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'])
+                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'],
+                                         is_http2=CONFIG['IsHTTP2'], host=conn.host)
     # rest.headers["x-amz-acl"] = 'private'
     rest.queryArgs['acl'] = None
     i = process_id % CONFIG['ThreadsPerUser']
     if CONFIG['BucketNameFixed']:
         rest.bucket = CONFIG['BucketNameFixed']
+    start_time = None
     if CONFIG['TpsPerThread']:
-        startTime = time.time()  # 开始时间
+        start_time = time.time()  # 开始时间
 
     user_id = 'domainiddomainiddomainiddo' + user.ak[len(user.ak) - 6:]
     displayname = 'domainnamedom' + user.ak[len(user.ak) - 6:]
@@ -1045,10 +1211,11 @@ def put_bucket_acl(process_id, user, conn, result_queue):
     while i < CONFIG['BucketsPerUser']:
         if CONFIG['TpsPerThread']:  # 限制tps
             # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求 / 限制TPS + 并发开始时间
-            dstTime = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
-                'TpsPerThread'] + startTime
-            waitTime = dstTime - time.time()
-            if waitTime > 0:  time.sleep(waitTime)
+            dst_time = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
+                'TpsPerThread'] + start_time
+            wait_time = dst_time - time.time()
+            if wait_time > 0:
+                time.sleep(wait_time)
         if not CONFIG['BucketNameFixed']:
             rest.bucket = '%s.%s.%d' % (user.ak.lower(), CONFIG['BucketNamePrefix'], i)
         i += CONFIG['ThreadsPerUser']
@@ -1063,20 +1230,23 @@ def get_bucket_acl(process_id, user, conn, result_queue):
     request_type = 'GetBucketAcl'
     rest = obsPyCmd.OBSRequestDescriptor(request_type, ak=user.ak, sk=user.sk,
                                          auth_algorithm=CONFIG['AuthAlgorithm'], virtual_host=CONFIG['VirtualHost'],
-                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'])
+                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'],
+                                         is_http2=CONFIG['IsHTTP2'], host=conn.host)
     rest.queryArgs['acl'] = None
     i = process_id % CONFIG['ThreadsPerUser']
     if CONFIG['BucketNameFixed']:
         rest.bucket = CONFIG['BucketNameFixed']
+    start_time = None
     if CONFIG['TpsPerThread']:
-        startTime = time.time()  # 开始时间
+        start_time = time.time()  # 开始时间
     while i < CONFIG['BucketsPerUser']:
         if CONFIG['TpsPerThread']:  # 限制tps
             # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求 / 限制TPS + 并发开始时间
-            dstTime = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
-                'TpsPerThread'] + startTime
-            waitTime = dstTime - time.time()
-            if waitTime > 0:  time.sleep(waitTime)
+            dst_time = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
+                'TpsPerThread'] + start_time
+            wait_time = dst_time - time.time()
+            if wait_time > 0:
+                time.sleep(wait_time)
         if not CONFIG['BucketNameFixed']:
             rest.bucket = '%s.%s.%d' % (user.ak.lower(), CONFIG['BucketNamePrefix'], i)
         i += CONFIG['ThreadsPerUser']
@@ -1091,12 +1261,14 @@ def put_bucket_policy(process_id, user, conn, result_queue):
     request_type = 'PutBucketPolicy'
     rest = obsPyCmd.OBSRequestDescriptor(request_type, ak=user.ak, sk=user.sk,
                                          auth_algorithm=CONFIG['AuthAlgorithm'], virtual_host=CONFIG['VirtualHost'],
-                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'])
+                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'],
+                                         is_http2=CONFIG['IsHTTP2'], host=conn.host)
     rest.queryArgs['policy'] = None
     i = process_id % CONFIG['ThreadsPerUser']
 
+    start_time = None
     if CONFIG['TpsPerThread']:
-        startTime = time.time()  # 开始时间
+        start_time = time.time()  # 开始时间
 
     if CONFIG['BucketNameFixed']:
         rest.bucket = CONFIG['BucketNameFixed']
@@ -1104,10 +1276,11 @@ def put_bucket_policy(process_id, user, conn, result_queue):
     while i < CONFIG['BucketsPerUser']:
         if CONFIG['TpsPerThread']:  # 限制tps
             # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求 / 限制TPS + 并发开始时间
-            dstTime = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
-                'TpsPerThread'] + startTime
-            waitTime = dstTime - time.time()
-            if waitTime > 0:  time.sleep(waitTime)
+            dst_time = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
+                'TpsPerThread'] + start_time
+            wait_time = dst_time - time.time()
+            if wait_time > 0:
+                time.sleep(wait_time)
         if not CONFIG['BucketNameFixed']:
             rest.bucket = '%s.%s.%d' % (user.ak.lower(), CONFIG['BucketNamePrefix'], i)
         i += CONFIG['ThreadsPerUser']
@@ -1124,20 +1297,23 @@ def get_bucket_policy(process_id, user, conn, result_queue):
     request_type = 'GetBucketPolicy'
     rest = obsPyCmd.OBSRequestDescriptor(request_type, ak=user.ak, sk=user.sk,
                                          auth_algorithm=CONFIG['AuthAlgorithm'], virtual_host=CONFIG['VirtualHost'],
-                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'])
+                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'],
+                                         is_http2=CONFIG['IsHTTP2'], host=conn.host)
     rest.queryArgs['policy'] = None
     i = process_id % CONFIG['ThreadsPerUser']
     if CONFIG['BucketNameFixed']:
         rest.bucket = CONFIG['BucketNameFixed']
+    start_time = None
     if CONFIG['TpsPerThread']:
-        startTime = time.time()  # 开始时间
+        start_time = time.time()  # 开始时间
     while i < CONFIG['BucketsPerUser']:
         if CONFIG['TpsPerThread']:  # 限制tps
             # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求 / 限制TPS + 并发开始时间
-            dstTime = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
-                'TpsPerThread'] + startTime
-            waitTime = dstTime - time.time()
-            if waitTime > 0:  time.sleep(waitTime)
+            dst_time = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
+                'TpsPerThread'] + start_time
+            wait_time = dst_time - time.time()
+            if wait_time > 0:
+                time.sleep(wait_time)
         if not CONFIG['BucketNameFixed']:
             rest.bucket = '%s.%s.%d' % (user.ak.lower(), CONFIG['BucketNamePrefix'], i)
         i += CONFIG['ThreadsPerUser']
@@ -1153,20 +1329,23 @@ def delete_bucket_policy(process_id, user, conn, result_queue):
     request_type = 'DeleteBucketPolicy'
     rest = obsPyCmd.OBSRequestDescriptor(request_type, ak=user.ak, sk=user.sk,
                                          auth_algorithm=CONFIG['AuthAlgorithm'], virtual_host=CONFIG['VirtualHost'],
-                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'])
+                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'],
+                                         is_http2=CONFIG['IsHTTP2'], host=conn.host)
     rest.queryArgs['policy'] = None
     i = process_id % CONFIG['ThreadsPerUser']
     if CONFIG['BucketNameFixed']:
         rest.bucket = CONFIG['BucketNameFixed']
+    start_time = None
     if CONFIG['TpsPerThread']:
-        startTime = time.time()  # 开始时间
+        start_time = time.time()  # 开始时间
     while i < CONFIG['BucketsPerUser']:
         if CONFIG['TpsPerThread']:  # 限制tps
             # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求 / 限制TPS + 并发开始时间
-            dstTime = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
-                'TpsPerThread'] + startTime
-            waitTime = dstTime - time.time()
-            if waitTime > 0:  time.sleep(waitTime)
+            dst_time = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
+                'TpsPerThread'] + start_time
+            wait_time = dst_time - time.time()
+            if wait_time > 0:
+                time.sleep(wait_time)
         if not CONFIG['BucketNameFixed']:
             rest.bucket = '%s.%s.%d' % (user.ak.lower(), CONFIG['BucketNamePrefix'], i)
         i += CONFIG['ThreadsPerUser']
@@ -1182,23 +1361,26 @@ def put_bucket_lifecycle(process_id, user, conn, result_queue):
     request_type = 'PutBucketLifecycle'
     rest = obsPyCmd.OBSRequestDescriptor(request_type, ak=user.ak, sk=user.sk,
                                          auth_algorithm=CONFIG['AuthAlgorithm'], virtual_host=CONFIG['VirtualHost'],
-                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'])
+                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'],
+                                         is_http2=CONFIG['IsHTTP2'], host=conn.host)
     rest.queryArgs['lifecycle'] = None
     i = process_id % CONFIG['ThreadsPerUser']
     if CONFIG['BucketNameFixed']:
         rest.bucket = CONFIG['BucketNameFixed']
+    start_time = None
     if CONFIG['TpsPerThread']:
-        startTime = time.time()  # 开始时间
+        start_time = time.time()  # 开始时间
     rest.sendContent = '<LifecycleConfiguration><Rule><Prefix>%s</Prefix><Status>Enabled</Status><Expiration><Days>%d</Days></Expiration></Rule></LifecycleConfiguration>' % \
                        (CONFIG['BucketNameFixed'], 2)
     rest.headers['Content-MD5'] = base64.b64encode(hashlib.md5(rest.sendContent).digest())
     while i < CONFIG['BucketsPerUser']:
         if CONFIG['TpsPerThread']:  # 限制tps
             # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求 / 限制TPS + 并发开始时间
-            dstTime = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
-                'TpsPerThread'] + startTime
-            waitTime = dstTime - time.time()
-            if waitTime > 0:  time.sleep(waitTime)
+            dst_time = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
+                'TpsPerThread'] + start_time
+            wait_time = dst_time - time.time()
+            if wait_time > 0:
+                time.sleep(wait_time)
         if not CONFIG['BucketNameFixed']:
             rest.bucket = '%s.%s.%d' % (user.ak.lower(), CONFIG['BucketNamePrefix'], i)
         i += CONFIG['ThreadsPerUser']
@@ -1214,20 +1396,23 @@ def get_bucket_lifecycle(process_id, user, conn, result_queue):
     request_type = 'GetBucketLifecycle'
     rest = obsPyCmd.OBSRequestDescriptor(request_type, ak=user.ak, sk=user.sk,
                                          auth_algorithm=CONFIG['AuthAlgorithm'], virtual_host=CONFIG['VirtualHost'],
-                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'])
+                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'],
+                                         is_http2=CONFIG['IsHTTP2'], host=conn.host)
     rest.queryArgs['lifecycle'] = None
     i = process_id % CONFIG['ThreadsPerUser']
     if CONFIG['BucketNameFixed']:
         rest.bucket = CONFIG['BucketNameFixed']
+    start_time = None
     if CONFIG['TpsPerThread']:
-        startTime = time.time()  # 开始时间
+        start_time = time.time()  # 开始时间
     while i < CONFIG['BucketsPerUser']:
         if CONFIG['TpsPerThread']:  # 限制tps
             # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求 / 限制TPS + 并发开始时间
-            dstTime = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
-                'TpsPerThread'] + startTime
-            waitTime = dstTime - time.time()
-            if waitTime > 0:  time.sleep(waitTime)
+            dst_time = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
+                'TpsPerThread'] + start_time
+            wait_time = dst_time - time.time()
+            if wait_time > 0:
+                time.sleep(wait_time)
         if not CONFIG['BucketNameFixed']:
             rest.bucket = '%s.%s.%d' % (user.ak.lower(), CONFIG['BucketNamePrefix'], i)
         i += CONFIG['ThreadsPerUser']
@@ -1243,20 +1428,23 @@ def delete_bucket_lifecycle(process_id, user, conn, result_queue):
     request_type = 'DeleteBucketLifecycle'
     rest = obsPyCmd.OBSRequestDescriptor(request_type, ak=user.ak, sk=user.sk,
                                          auth_algorithm=CONFIG['AuthAlgorithm'], virtual_host=CONFIG['VirtualHost'],
-                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'])
+                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'],
+                                         is_http2=CONFIG['IsHTTP2'], host=conn.host)
     rest.queryArgs['lifecycle'] = None
     i = process_id % CONFIG['ThreadsPerUser']
     if CONFIG['BucketNameFixed']:
         rest.bucket = CONFIG['BucketNameFixed']
+    start_time = None
     if CONFIG['TpsPerThread']:
-        startTime = time.time()  # 开始时间
+        start_time = time.time()  # 开始时间
     while i < CONFIG['BucketsPerUser']:
         if CONFIG['TpsPerThread']:  # 限制tps
             # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求 / 限制TPS + 并发开始时间
-            dstTime = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
-                'TpsPerThread'] + startTime
-            waitTime = dstTime - time.time()
-            if waitTime > 0:  time.sleep(waitTime)
+            dst_time = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
+                'TpsPerThread'] + start_time
+            wait_time = dst_time - time.time()
+            if wait_time > 0:
+                time.sleep(wait_time)
         if not CONFIG['BucketNameFixed']:
             rest.bucket = '%s.%s.%d' % (user.ak.lower(), CONFIG['BucketNamePrefix'], i)
         i += CONFIG['ThreadsPerUser']
@@ -1273,22 +1461,25 @@ def put_bucket_notification(process_id, user, conn, result_queue):
     request_type = 'PutBucketNotification'
     rest = obsPyCmd.OBSRequestDescriptor(request_type, ak=user.ak, sk=user.sk,
                                          auth_algorithm=CONFIG['AuthAlgorithm'], virtual_host=CONFIG['VirtualHost'],
-                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'])
+                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'],
+                                         is_http2=CONFIG['IsHTTP2'], host=conn.host)
     rest.queryArgs['notification'] = None
     rest.sendContent = '<NotificationConfiguration></NotificationConfiguration>'
     i = process_id % CONFIG['ThreadsPerUser']
     if CONFIG['BucketNameFixed']:
         rest.bucket = CONFIG['BucketNameFixed']
+    start_time = None
     if CONFIG['TpsPerThread']:
-        startTime = time.time()  # 开始时间
+        start_time = time.time()  # 开始时间
 
     while i < CONFIG['BucketsPerUser']:
         if CONFIG['TpsPerThread']:  # 限制tps
             # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求 / 限制TPS + 并发开始时间
-            dstTime = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
-                'TpsPerThread'] + startTime
-            waitTime = dstTime - time.time()
-            if waitTime > 0:  time.sleep(waitTime)
+            dst_time = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
+                'TpsPerThread'] + start_time
+            wait_time = dst_time - time.time()
+            if wait_time > 0:
+                time.sleep(wait_time)
         if not CONFIG['BucketNameFixed']:
             rest.bucket = '%s.%s.%d' % (user.ak.lower(), CONFIG['BucketNamePrefix'], i)
         i += CONFIG['ThreadsPerUser']
@@ -1304,20 +1495,23 @@ def get_bucket_notification(process_id, user, conn, result_queue):
     request_type = 'GetBucketNotification'
     rest = obsPyCmd.OBSRequestDescriptor(request_type, ak=user.ak, sk=user.sk,
                                          auth_algorithm=CONFIG['AuthAlgorithm'], virtual_host=CONFIG['VirtualHost'],
-                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'])
+                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'],
+                                         is_http2=CONFIG['IsHTTP2'], host=conn.host)
     rest.queryArgs['notification'] = None
     i = process_id % CONFIG['ThreadsPerUser']
     if CONFIG['BucketNameFixed']:
         rest.bucket = CONFIG['BucketNameFixed']
+    start_time = None
     if CONFIG['TpsPerThread']:
-        startTime = time.time()  # 开始时间
+        start_time = time.time()  # 开始时间
     while i < CONFIG['BucketsPerUser']:
         if CONFIG['TpsPerThread']:  # 限制tps
             # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求 / 限制TPS + 并发开始时间
-            dstTime = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
-                'TpsPerThread'] + startTime
-            waitTime = dstTime - time.time()
-            if waitTime > 0:  time.sleep(waitTime)
+            dst_time = (i - process_id % CONFIG['ThreadsPerUser']) / CONFIG['ThreadsPerUser'] * 1.0 / CONFIG[
+                'TpsPerThread'] + start_time
+            wait_time = dst_time - time.time()
+            if wait_time > 0:
+                time.sleep(wait_time)
         if not CONFIG['BucketNameFixed']:
             rest.bucket = '%s.%s.%d' % (user.ak.lower(), CONFIG['BucketNamePrefix'], i)
         i += CONFIG['ThreadsPerUser']
@@ -1333,7 +1527,10 @@ def put_object(process_id, user, conn, result_queue):
     request_type = 'PutObject'
     rest = obsPyCmd.OBSRequestDescriptor(request_type, ak=user.ak, sk=user.sk,
                                          auth_algorithm=CONFIG['AuthAlgorithm'], virtual_host=CONFIG['VirtualHost'],
-                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'])
+                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'],
+                                         is_data_from_file=CONFIG['IsDataFromFile'],
+                                         local_file_path=CONFIG['LocalFilePath'], is_http2=CONFIG['IsHTTP2'],
+                                         host=conn.host)
     rest.headers['content-type'] = 'application/octet-stream'
     if CONFIG['ObjectStorageClass']:
         if CONFIG['ObjectStorageClass'][-1:] == ',':
@@ -1363,6 +1560,8 @@ def put_object(process_id, user, conn, result_queue):
     # 如果打开CalHashMD5开关，在对象上传时写入一个自定义元数据，用于标记为本工具put上传的对象。
     if CONFIG['CalHashMD5']:
         rest.headers['x-amz-meta-md5written'] = 'yes'
+    if CONFIG['Expires']:
+        rest.headers['x-obs-expires'] = CONFIG['Expires']
     # 对象多版本，需要在上传后记录下版本号
     obj_v = ''
     obj_v_file = 'data/objv-%d.dat' % process_id
@@ -1370,12 +1569,11 @@ def put_object(process_id, user, conn, result_queue):
     # 错开每个并发起始选桶，避免单桶性能瓶颈。
     range_arr = range(0, CONFIG['BucketsPerUser'])
     if CONFIG['AvoidSinBkOp']:
-        range_arr = range(process_id % CONFIG['BucketsPerUser'], CONFIG['BucketsPerUser']) + range(0,
-                                                                                                   process_id % CONFIG[
-                                                                                                       'BucketsPerUser'])
+        range_arr = range(process_id % CONFIG['BucketsPerUser'], CONFIG['BucketsPerUser']) + range(0, process_id % CONFIG['BucketsPerUser'])
+    start_time = None
     if CONFIG['TpsPerThread']:
-        startTime = time.time()  # 开始时间
-    bucketsCover = 0  # 已经遍历桶数量
+        start_time = time.time()  # 开始时间
+    buckets_cover = 0  # 已经遍历桶数量
     for i in range_arr:
         if not CONFIG['BucketNameFixed']:
             rest.bucket = '%s.%s.%d' % (user.ak.lower(), CONFIG['BucketNamePrefix'], i)
@@ -1395,8 +1593,7 @@ def put_object(process_id, user, conn, result_queue):
                             'ObjectNamePrefix', CONFIG['ObjectNamePrefix'])
                         rest.key = hashlib.md5(object_name).hexdigest() + '-' + object_name
                 else:
-                    object_name = Util.random_string_create(86)
-                    rest.key = hashlib.md5(object_name).hexdigest() + '-' + object_name
+                    rest.key = Util.random_string_create(random.randint(300, 900))
             if CONFIG['SrvSideEncryptType'].lower() == 'sse-c':
                 rest.headers['x-amz-server-side-encryption-customer-key'] = base64.b64encode(rest.key[-32:].zfill(32))
                 rest.headers['x-amz-server-side-encryption-customer-key-MD5'] = base64.b64encode(
@@ -1407,20 +1604,24 @@ def put_object(process_id, user, conn, result_queue):
             while put_times_for_one_obj > 0:
                 if CONFIG['TpsPerThread']:  # 限制tps
                     # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求/限制TPS +　并发开始时间
-                    dstTime = (bucketsCover * CONFIG['ObjectsPerBucketPerThread'] * CONFIG['PutTimesForOneObj'] + j *
+                    dst_time = (buckets_cover * CONFIG['ObjectsPerBucketPerThread'] * CONFIG['PutTimesForOneObj'] + j *
                                CONFIG[
                                    'PutTimesForOneObj'] + (CONFIG['PutTimesForOneObj'] - put_times_for_one_obj)) * 1.0 / \
-                              CONFIG['TpsPerThread'] + startTime
-                    waitTime = dstTime - time.time()
-                    if waitTime > 0:
-                        time.sleep(waitTime)
+                              CONFIG['TpsPerThread'] + start_time
+                    wait_time = dst_time - time.time()
+                    if wait_time > 0:
+                        time.sleep(wait_time)
                 if CONFIG['WindowMode']:  # 运行窗口时间限制
                     window_time_now = (time.time() - valid_start_time.value) % CONFIG['WindowTime']
                     if window_time_now > CONFIG['RunWindowSeconds']:
                         time.sleep(CONFIG['WindowTime'] - window_time_now)
-                if not fixed_size:
-                    # change size every request for the same obj.
-                    rest.contentLength, fixed_size = Util.generate_a_size(CONFIG['ObjectSize'])
+                if CONFIG['IsDataFromFile']:
+                    rest.contentLength = int(os.path.getsize(CONFIG['LocalFilePath']))
+                    fixed_size = True
+                else:
+                    if not fixed_size:
+                        # change size every request for the same obj.
+                        rest.contentLength, fixed_size = Util.generate_a_size(CONFIG['ObjectSize'])
                 put_times_for_one_obj -= 1
                 resp = obsPyCmd.OBSRequestHandler(rest, conn).make_request(cal_md5=CONFIG['CalHashMD5'],
                                                                            memory_file=SHARE_MEM)
@@ -1436,9 +1637,368 @@ def put_object(process_id, user, conn, result_queue):
                         open(obj_v_file, 'a').write(obj_v)
                         obj_v = ''
             j += 1
-        bucketsCover += 1
+        buckets_cover += 1
     if obj_v:
         open(obj_v_file, 'a').write(obj_v)
+
+
+def append_object(process_id, user, conn, result_queue):
+    global SHARE_MEM
+    request_type = 'AppendObject'
+
+    if CONFIG['GetPositionFromMeta']:
+        logging.debug('Getting position from object meta')
+        rest_head = obsPyCmd.OBSRequestDescriptor("HeadObject", ak=user.ak, sk=user.sk,
+                                                  auth_algorithm=CONFIG['AuthAlgorithm'], virtual_host=CONFIG['VirtualHost'],
+                                                  domain_name=CONFIG['DomainName'], region=CONFIG['Region'],
+                                                  is_http2=CONFIG['IsHTTP2'], host=conn.host)
+
+        rest_append = obsPyCmd.OBSRequestDescriptor(request_type, ak=user.ak, sk=user.sk,
+                                                    auth_algorithm=CONFIG['AuthAlgorithm'], virtual_host=CONFIG['VirtualHost'],
+                                                    domain_name=CONFIG['DomainName'], region=CONFIG['Region'],
+                                                    is_http2=CONFIG['IsHTTP2'], host=conn.host)
+
+        # 处理head请求头域
+        global OBJECTS
+        if OBJECTS:
+            handle_from_objects(request_type, rest_head, process_id, user, conn, result_queue)
+            return
+
+        elif not CONFIG['ObjectLexical']:
+            logging.warn('Object name is not lexical, exit..')
+            return
+
+        if CONFIG['BucketNameFixed']:
+            rest_head.bucket = CONFIG['BucketNameFixed']
+        if CONFIG['ObjectNameFixed']:
+            rest_head.key = CONFIG['ObjectNameFixed']
+        if CONFIG['SrvSideEncryptType'].lower() == 'sse-c':
+            rest_head.headers['x-amz-server-side-encryption-customer-algorithm'] = 'AES256'
+        start_time = None
+        start_time_append = None
+        if CONFIG['TpsPerThread']:
+            start_time_head = time.time()  # 开始时间
+            start_time_append = time.time()
+
+        # 处理append object请求头域
+        rest_append.headers['content-type'] = 'application/octet-stream'
+        if CONFIG['ObjectStorageClass']:
+            if CONFIG['ObjectStorageClass'][-1:] == ',':
+                CONFIG['ObjectStorageClass'] = CONFIG['ObjectStorageClass'][:-1]
+            if CONFIG['ObjectStorageClass'].__contains__(','):
+                object_storage_class_provided = CONFIG['ObjectStorageClass'].split(',')
+                rest_append.headers['x-amz-storage-class'] = random.choice(object_storage_class_provided)
+            else:
+                rest_append.headers['x-amz-storage-class'] = CONFIG['ObjectStorageClass']
+        if CONFIG['PutWithACL']:
+            rest_append.headers['x-amz-acl'] = CONFIG['PutWithACL']
+        fixed_size = False
+        if CONFIG['BucketNameFixed']:
+            rest_append.bucket = CONFIG['BucketNameFixed']
+        if CONFIG['ObjectNameFixed']:
+            rest_append.key = CONFIG['ObjectNameFixed']
+        if CONFIG['SrvSideEncryptType'].lower() == 'sse-c':
+            rest_append.headers['x-amz-server-side-encryption-customer-algorithm'] = 'AES256'
+        elif CONFIG['SrvSideEncryptType'].lower() == 'sse-kms' and CONFIG['SrvSideEncryptAlgorithm'].lower() == 'aws:kms':
+            rest_append.headers['x-amz-server-side-encryption'] = 'aws:kms'
+            if CONFIG['SrvSideEncryptAWSKMSKeyId']:
+                rest_append.headers['x-amz-server-side-encryption-aws-kms-key-id'] = CONFIG['SrvSideEncryptAWSKMSKeyId']
+            if CONFIG['SrvSideEncryptContext']:
+                rest_append.headers['x-amz-server-side-encryption-context'] = CONFIG['SrvSideEncryptContext']
+        elif CONFIG['SrvSideEncryptType'].lower() == 'sse-kms' and CONFIG['SrvSideEncryptAlgorithm'].lower() == 'aes256':
+            rest_append.headers['x-amz-server-side-encryption'] = 'AES256'
+        # 如果打开CalHashMD5开关，在对象上传时写入一个自定义元数据，用于标记为本工具put上传的对象。
+        if CONFIG['CalHashMD5']:
+            rest_append.headers['x-amz-meta-md5written'] = 'yes'
+        if CONFIG['Expires']:
+            rest_append.headers['x-obs-expires'] = CONFIG['Expires']
+
+        # 错开每个并发起始选桶，避免单桶性能瓶颈。
+        rest_append.queryArgs["append"] = None
+
+        range_arr = range(0, CONFIG['BucketsPerUser'])
+        if CONFIG['AvoidSinBkOp']:
+            range_arr = range(process_id % CONFIG['BucketsPerUser'], CONFIG['BucketsPerUser']) + range(0, process_id % CONFIG['BucketsPerUser'])
+
+        buckets_cover = 0  # 已经遍历桶数量
+        for i in range_arr:
+            if not CONFIG['BucketNameFixed']:
+                rest_head.bucket = '%s.%s.%d' % (user.ak.lower(), CONFIG['BucketNamePrefix'], i)
+                rest_append.bucket = '%s.%s.%d' % (user.ak.lower(), CONFIG['BucketNamePrefix'], i)
+            j = 0
+            while j < CONFIG['ObjectsPerBucketPerThread']:
+                if not CONFIG['ObjectNameFixed']:
+                    if CONFIG['ObjectLexical']:
+                        if not CONFIG['ObjNamePatternHash']:
+                            key = CONFIG['ObjectNamePartten'].replace('processID', str(process_id)).replace('Index', str(j)).replace('ObjectNamePrefix', CONFIG['ObjectNamePrefix'])
+                        else:
+                            object_name = CONFIG['ObjectNamePartten'].replace('processID', str(process_id)).replace('Index', str(j)).replace('ObjectNamePrefix', CONFIG['ObjectNamePrefix'])
+                            key = hashlib.md5(object_name).hexdigest() + '-' + object_name
+                    else:
+                        key = Util.random_string_create(random.randint(300, 900))
+                    rest_head.key = key
+                    rest_append.key = key
+                if CONFIG['SrvSideEncryptType'].lower() == 'sse-c':
+                    rest_head.headers['x-amz-server-side-encryption-customer-key'] = base64.b64encode(rest_head.key[-32:].zfill(32))
+                    rest_append.headers['x-amz-server-side-encryption-customer-key'] = base64.b64encode(rest_append.key[-32:].zfill(32))
+                    rest_head.headers['x-amz-server-side-encryption-customer-key-MD5'] = base64.b64encode(hashlib.md5(rest_head.key[-32:].zfill(32)).digest())
+                    rest_append.headers['x-amz-server-side-encryption-customer-key-MD5'] = base64.b64encode(hashlib.md5(rest_append.key[-32:].zfill(32)).digest())
+                    logging.debug('side-encryption-customer-key: [%r]' % rest_append.key[-32:].zfill(32))
+                put_times_for_one_obj = CONFIG['PutTimesForOneObj']
+                while put_times_for_one_obj > 0:
+                    logging.debug("send Head object meta data request")
+                    resp_head = obsPyCmd.OBSRequestHandler(rest_head, conn).make_request()
+                    # 暂定不需要把head请求加入队列
+                    # result_queue.put((process_id, user.username, rest_head.recordUrl, request_type, resp_head.start_time, resp_head.end_time, resp_head.send_bytes, resp_head.recv_bytes, '', resp_head.request_id, resp_head.status, resp_head.id2))
+                    if CONFIG['IsHTTP2']:
+                        rest_append.queryArgs["position"] = resp_head.position[0] if '200' in resp_head.status and resp_head.position else "0"
+                    else:
+                        rest_append.queryArgs["position"] = resp_head.position if resp_head.status == '200 OK' else "0"
+                    logging.debug("position: [%s]" % str(resp_head.position))
+
+                    if CONFIG['TpsPerThread']:  # 限制tps
+                        # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求/限制TPS +　并发开始时间
+                        dst_time_append = (buckets_cover * CONFIG['ObjectsPerBucketPerThread'] * CONFIG['PutTimesForOneObj'] + j * CONFIG['PutTimesForOneObj'] + (CONFIG['PutTimesForOneObj'] - put_times_for_one_obj)) * 1.0 / CONFIG['TpsPerThread'] + start_time_append
+                        wait_time_append = dst_time_append - time.time()
+                        if wait_time_append > 0:
+                            time.sleep(wait_time_append)
+                    if CONFIG['WindowMode']:  # 运行窗口时间限制
+                        window_time_now = (time.time() - valid_start_time.value) % CONFIG['WindowTime']
+                        if window_time_now > CONFIG['RunWindowSeconds']:
+                            time.sleep(CONFIG['WindowTime'] - window_time_now)
+                    if not fixed_size:
+                        # change size every request for the same obj.
+                        rest_append.contentLength, fixed_size = Util.generate_a_size(CONFIG['ObjectSize'])
+                    put_times_for_one_obj -= 1
+
+                    logging.debug("send append object request")
+                    resp = obsPyCmd.OBSRequestHandler(rest_append, conn).make_request(cal_md5=CONFIG['CalHashMD5'],
+                                                                                      memory_file=SHARE_MEM)
+                    result_queue.put(
+                        (process_id, user.username, rest_append.recordUrl, request_type, resp.start_time,
+                         resp.end_time, resp.send_bytes, resp.recv_bytes, 'MD5:' + str(resp.content_md5),
+                         resp.request_id, resp.status, resp.id2))
+                j += 1
+            buckets_cover += 1
+    else:
+        global APPEND_OBJECTS
+        logging.debug("append object performance test")
+        request_type = 'AppendObject'
+        rest = obsPyCmd.OBSRequestDescriptor(request_type, ak=user.ak, sk=user.sk,
+                                             auth_algorithm=CONFIG['AuthAlgorithm'], virtual_host=CONFIG['VirtualHost'],
+                                             domain_name=CONFIG['DomainName'], region=CONFIG['Region'],
+                                             is_http2=CONFIG['IsHTTP2'], host=conn.host)
+        rest.headers['content-type'] = 'application/octet-stream'
+        if CONFIG['ObjectStorageClass']:
+            if CONFIG['ObjectStorageClass'][-1:] == ',':
+                CONFIG['ObjectStorageClass'] = CONFIG['ObjectStorageClass'][:-1]
+            if CONFIG['ObjectStorageClass'].__contains__(','):
+                object_storage_class_provided = CONFIG['ObjectStorageClass'].split(',')
+                rest.headers['x-amz-storage-class'] = random.choice(object_storage_class_provided)
+            else:
+                rest.headers['x-amz-storage-class'] = CONFIG['ObjectStorageClass']
+        if CONFIG['PutWithACL']:
+            rest.headers['x-amz-acl'] = CONFIG['PutWithACL']
+        fixed_size = False
+        if CONFIG['BucketNameFixed']:
+            rest.bucket = CONFIG['BucketNameFixed']
+        if CONFIG['ObjectNameFixed']:
+            rest.key = CONFIG['ObjectNameFixed']
+        if CONFIG['SrvSideEncryptType'].lower() == 'sse-c':
+            rest.headers['x-amz-server-side-encryption-customer-algorithm'] = 'AES256'
+        elif CONFIG['SrvSideEncryptType'].lower() == 'sse-kms' and CONFIG['SrvSideEncryptAlgorithm'].lower() == 'aws:kms':
+            rest.headers['x-amz-server-side-encryption'] = 'aws:kms'
+            if CONFIG['SrvSideEncryptAWSKMSKeyId']:
+                rest.headers['x-amz-server-side-encryption-aws-kms-key-id'] = CONFIG['SrvSideEncryptAWSKMSKeyId']
+            if CONFIG['SrvSideEncryptContext']:
+                rest.headers['x-amz-server-side-encryption-context'] = CONFIG['SrvSideEncryptContext']
+        elif CONFIG['SrvSideEncryptType'].lower() == 'sse-kms' and CONFIG['SrvSideEncryptAlgorithm'].lower() == 'aes256':
+            rest.headers['x-amz-server-side-encryption'] = 'AES256'
+        # 如果打开CalHashMD5开关，在对象上传时写入一个自定义元数据，用于标记为本工具put上传的对象。
+        if CONFIG['CalHashMD5']:
+            rest.headers['x-amz-meta-md5written'] = 'yes'
+        if CONFIG['Expires']:
+            rest.headers['x-obs-expires'] = CONFIG['Expires']
+
+        # 如果position下有上传记录的对象名和历史写入的位置信息，从该文件读。
+        obj_p_file = 'position/%s-%s-%d.dat' % (CONFIG['BucketNamePrefix'] if not CONFIG['BucketNameFixed'] else CONFIG['BucketNameFixed'],
+                                                CONFIG['ObjectNamePrefix'] if not CONFIG['ObjectNameFixed'] else CONFIG['ObjectNameFixed'],
+                                                process_id)
+
+        # 判断该对象是否已经有position记录
+        is_position_recorded = False
+        if os.path.exists(obj_p_file) and os.path.getsize(obj_p_file) > 0 and len(APPEND_OBJECTS) > 0:
+            is_position_recorded = True
+            os.remove(obj_p_file)
+
+        obj_p = ''
+        obj_p_file = 'position/%s-%s-%d.dat' % (CONFIG['BucketNamePrefix'] if not CONFIG['BucketNameFixed'] else CONFIG['BucketNameFixed'],
+                                                CONFIG['ObjectNamePrefix'] if not CONFIG['ObjectNameFixed'] else CONFIG['ObjectNameFixed'],
+                                                process_id)
+        open(obj_p_file, 'w').write(obj_p)
+
+        rest.queryArgs["append"] = None
+
+        # rest.queryArgs["position"] = "0"
+
+        range_arr = range(0, CONFIG['BucketsPerUser'])
+        if CONFIG['AvoidSinBkOp']:
+            range_arr = range(process_id % CONFIG['BucketsPerUser'], CONFIG['BucketsPerUser']) + range(0, process_id % CONFIG['BucketsPerUser'])
+        start_time = None
+        if CONFIG['TpsPerThread']:
+            start_time = time.time()  # 开始时间
+        buckets_cover = 0  # 已经遍历桶数量
+        for i in range_arr:
+            if not CONFIG['BucketNameFixed']:
+                rest.bucket = '%s.%s.%d' % (user.ak.lower(), CONFIG['BucketNamePrefix'], i)
+            j = 0
+            while j < CONFIG['ObjectsPerBucketPerThread']:
+                if not CONFIG['ObjectNameFixed']:
+                    if CONFIG['ObjectLexical']:
+                        if not CONFIG['ObjNamePatternHash']:
+                            rest.key = CONFIG['ObjectNamePartten'].replace('processID', str(process_id)).replace('Index', str(j)).replace('ObjectNamePrefix', CONFIG['ObjectNamePrefix'])
+                        else:
+                            object_name = CONFIG['ObjectNamePartten'].replace('processID', str(process_id)).replace('Index', str(j)).replace('ObjectNamePrefix', CONFIG['ObjectNamePrefix'])
+                            rest.key = hashlib.md5(object_name).hexdigest() + '-' + object_name
+                    else:
+                        rest.key = Util.random_string_create(random.randint(300, 900))
+                if CONFIG['SrvSideEncryptType'].lower() == 'sse-c':
+                    rest.headers['x-amz-server-side-encryption-customer-key'] = base64.b64encode(
+                        rest.key[-32:].zfill(32))
+                    rest.headers['x-amz-server-side-encryption-customer-key-MD5'] = base64.b64encode(
+                        hashlib.md5(rest.key[-32:].zfill(32)).digest())
+                    logging.debug('side-encryption-customer-key: [%r]' % rest.key[-32:].zfill(32))
+                put_times_for_one_obj = CONFIG['PutTimesForOneObj']
+
+                while put_times_for_one_obj > 0:
+                    if CONFIG['TpsPerThread']:  # 限制tps
+                        # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求/限制TPS +　并发开始时间
+                        dst_time = (buckets_cover * CONFIG['ObjectsPerBucketPerThread'] * CONFIG['PutTimesForOneObj'] + j * CONFIG['PutTimesForOneObj'] + (CONFIG['PutTimesForOneObj'] - put_times_for_one_obj)) * 1.0 / CONFIG['TpsPerThread'] + start_time
+                        wait_time = dst_time - time.time()
+                        if wait_time > 0:
+                            time.sleep(wait_time)
+                    if CONFIG['WindowMode']:  # 运行窗口时间限制
+                        window_time_now = (time.time() - valid_start_time.value) % CONFIG['WindowTime']
+                        if window_time_now > CONFIG['RunWindowSeconds']:
+                            time.sleep(CONFIG['WindowTime'] - window_time_now)
+                    if not fixed_size:
+                        # change size every request for the same obj.
+                        rest.contentLength, fixed_size = Util.generate_a_size(CONFIG['ObjectSize'])
+                    put_times_for_one_obj -= 1
+                    if is_position_recorded:
+                        rest.queryArgs["position"] = APPEND_OBJECTS[rest.key]
+                    else:
+                        rest.queryArgs["position"] = "0"
+                    resp = obsPyCmd.OBSRequestHandler(rest, conn).make_request(cal_md5=CONFIG['CalHashMD5'],
+                                                                               memory_file=SHARE_MEM)
+                    result_queue.put(
+                        (process_id, user.username, rest.recordUrl, request_type, resp.start_time,
+                         resp.end_time, resp.send_bytes, resp.recv_bytes, 'MD5:' + str(resp.content_md5),
+                         resp.request_id, resp.status, resp.id2))
+                    # 更新对象追加写position
+                    obj_p += '(%s,%s)\n' % (rest.key, resp.position)
+                    # 每1KB，写入对象的position到本地文件objp-process_id.dat
+                    if len(obj_p) >= 1024:
+                        logging.info('write obj_v to file %s' % obj_p_file)
+                        open(obj_p_file, 'a').write(obj_p)
+                        obj_p = ''
+                j += 1
+            buckets_cover += 1
+            if obj_p:
+                open(obj_p_file, 'a').write(obj_p)
+
+
+def image_process(process_id, user, conn, result_queue):
+    request_type = 'ImageProcess'
+
+    rest = obsPyCmd.OBSRequestDescriptor(request_type, ak=user.ak, sk=user.sk,
+                                         auth_algorithm=CONFIG['AuthAlgorithm'], virtual_host=CONFIG['VirtualHost'],
+                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'],
+                                         is_cdn=CONFIG['IsCdn'], cdn_ak=CONFIG['CdnAK'], cdn_sk=CONFIG['CdnSK'],
+                                         cdn_sts_token=CONFIG['CdnSTSToken'])
+    if CONFIG['SrvSideEncryptType'].lower() == 'sse-c':
+        rest.headers['x-amz-server-side-encryption-customer-algorithm'] = 'AES256'
+    # 如果传入OBJECTS，则直接处理OBJECTS。
+    global OBJECTS, LIST_INDEX
+    if OBJECTS:
+        handle_from_objects(request_type, rest, process_id, user, conn, result_queue)
+        return
+
+    # 如果data下有上传记录的对象名和版本，从该文件读。
+    obj_v_file = 'data/objv-%d.dat' % process_id
+    if os.path.exists(obj_v_file) and os.path.getsize(obj_v_file) > 0:
+        handle_from_obj_v(request_type, obj_v_file, rest, process_id, user, conn, result_queue)
+        return
+
+    # 从字典序对象名下载。
+    if not CONFIG['ObjectLexical']:
+        logging.warn('Object name is not lexical, exit..')
+        return
+
+    i = 0
+    if CONFIG['BucketNameFixed']:
+        rest.bucket = CONFIG['BucketNameFixed']
+    if CONFIG['ObjectNameFixed']:
+        rest.key = CONFIG['ObjectNameFixed']
+    start_time = None
+    if CONFIG['TpsPerThread']:
+        start_time = time.time()  # 开始时间
+    while i < CONFIG['BucketsPerUser']:
+        if not CONFIG['BucketNameFixed']:
+            rest.bucket = '%s.%s.%d' % (user.ak.lower(), CONFIG['BucketNamePrefix'], i)
+        j = 0
+        while j < CONFIG['ObjectsPerBucketPerThread']:
+            if CONFIG['TpsPerThread']:  # 限制tps
+                # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求/限制TPS +　并发开始时间
+                dst_time = (i * CONFIG['ObjectsPerBucketPerThread'] + j) * 1.0 / CONFIG['TpsPerThread'] + start_time
+                wait_time = dst_time - time.time()
+                if wait_time > 0:
+                    time.sleep(wait_time)
+            if CONFIG['WindowMode']:  # 运行窗口时间限制
+                window_time_now = (time.time() - valid_start_time.value) % CONFIG['WindowTime']
+                if window_time_now > CONFIG['RunWindowSeconds']:
+                    time.sleep(CONFIG['WindowTime'] - window_time_now)
+            if not CONFIG['ObjectNameFixed']:
+                if not CONFIG['ObjNamePatternHash']:
+                    if not CONFIG['IsRandomGet']:
+                        rest.key = CONFIG['ObjectNamePartten'].replace('processID', str(process_id)).replace('Index',
+                                                                                                             str(
+                                                                                                                 j)).replace(
+                            'ObjectNamePrefix', CONFIG['ObjectNamePrefix'])
+                    else:
+                        rest.key = CONFIG['ObjectNamePartten'].replace('processID', str(process_id)).replace('Index',
+                                                                                                             str(
+                                                                                                                 random.choice(
+                                                                                                                     LIST_INDEX))).replace(
+                            'ObjectNamePrefix', CONFIG['ObjectNamePrefix'])
+                else:
+                    if not CONFIG['IsRandomGet']:
+                        object_name = CONFIG['ObjectNamePartten'].replace('processID', str(process_id)).replace('Index',
+                                                                                                                str(
+                                                                                                                    j)).replace(
+                            'ObjectNamePrefix', CONFIG['ObjectNamePrefix'])
+                        rest.key = hashlib.md5(object_name).hexdigest() + '-' + object_name
+                    else:
+                        index = random.choice(LIST_INDEX)
+                        object_name = CONFIG['ObjectNamePartten'].replace('processID', str(process_id)).replace('Index',
+                                                                                                                str(
+                                                                                                                    index)).replace(
+                            'ObjectNamePrefix', CONFIG['ObjectNamePrefix'])
+                        rest.key = hashlib.md5(object_name).hexdigest() + '-' + object_name
+            if CONFIG['SrvSideEncryptType'].lower() == 'sse-c':
+                rest.headers['x-amz-server-side-encryption-customer-key'] = base64.b64encode(rest.key[-32:].zfill(32))
+                rest.headers['x-amz-server-side-encryption-customer-key-MD5'] = base64.b64encode(
+                    hashlib.md5(rest.key[-32:].zfill(32)).digest())
+
+            rest.queryArgs["x-image-process"] = CONFIG['x-image-process']
+
+            resp = obsPyCmd.OBSRequestHandler(rest, conn).make_request(cal_md5=CONFIG['CalHashMD5'])
+            result_queue.put(
+                (process_id, user.username, rest.recordUrl, request_type, resp.start_time,
+                 resp.end_time, resp.send_bytes, resp.recv_bytes, 'MD5:' + str(resp.content_md5),
+                 resp.request_id, resp.status, resp.id2))
+            j += 1
+        i += 1
 
 
 def handle_from_objects(request_type, rest, process_id, user, conn, result_queue):
@@ -1457,21 +2017,24 @@ def handle_from_objects(request_type, rest, process_id, user, conn, result_queue
         else:
             start_index = process_id * objects_per_user + extra_obj
             end_index = start_index + objects_per_user
+    start_time = None
     if CONFIG['TpsPerThread']:
-        startTime = time.time()  # 开始时间
+        start_time = time.time()  # 开始时间
     pointer = start_index
     while pointer < end_index:
         if CONFIG['TpsPerThread']:  # 限制tps
             # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求/限制TPS +　并发开始时间
-            dstTime = (pointer - start_index) * 1.0 / CONFIG['TpsPerThread'] + startTime
-            waitTime = dstTime - time.time()
-            if waitTime > 0:  time.sleep(waitTime)
+            dst_time = (pointer - start_index) * 1.0 / CONFIG['TpsPerThread'] + start_time
+            wait_time = dst_time - time.time()
+            if wait_time > 0:
+                time.sleep(wait_time)
         if CONFIG['WindowMode']:  # 运行窗口时间限制
             window_time_now = (time.time() - valid_start_time.value) % CONFIG['WindowTime']
             if window_time_now > CONFIG['RunWindowSeconds']:
                 time.sleep(CONFIG['WindowTime'] - window_time_now)
         rest.bucket = OBJECTS[pointer][:OBJECTS[pointer].find('/')]
-        rest.key = OBJECTS[pointer][OBJECTS[pointer].find('/') + 1:]
+        # 当Put对象时在obsPyCmd中，对对象名作了url的编译处理，此时如果要读取，则需要作反编译
+        rest.key = urllib.unquote_plus(OBJECTS[pointer][OBJECTS[pointer].find('/') + 1:])
         if CONFIG['Testcase'] in (202,) and CONFIG['Range']:
             rest.headers['Range'] = 'bytes=%s' % random.choice(CONFIG['Range'].split(';')).strip()
         pointer += 1
@@ -1488,25 +2051,28 @@ def handle_from_objects(request_type, rest, process_id, user, conn, result_queue
 
 
 def handle_from_obj_v(request_type, obj_v_file, rest, process_id, user, conn, result_queue):
+    logging.debug("generate object name from obj_v")
     obj_v_file_read = open(obj_v_file, 'r')
     obj = obj_v_file_read.readline()
+    start_time = None
     if CONFIG['TpsPerThread']:
-        startTime = time.time()  # 开始时间
-    totalRequests = 0
+        start_time = time.time()  # 开始时间
+    total_requests = 0
     while obj:
         if obj and len(obj.split('\t')) != 3:
             logging.warning('obj [%r] format error in file %s' % (obj, obj_v_file))
             continue
         if CONFIG['TpsPerThread']:  # 限制tps
             # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求/限制TPS +　并发开始时间
-            dstTime = totalRequests * 1.0 / CONFIG['TpsPerThread'] + startTime
-            waitTime = dstTime - time.time()
-            if waitTime > 0:  time.sleep(waitTime)
+            dst_time = total_requests * 1.0 / CONFIG['TpsPerThread'] + start_time
+            wait_time = dst_time - time.time()
+            if wait_time > 0:
+                time.sleep(wait_time)
         if CONFIG['WindowMode']:  # 运行窗口时间限制
             window_time_now = (time.time() - valid_start_time.value) % CONFIG['WindowTime']
             if window_time_now > CONFIG['RunWindowSeconds']:
                 time.sleep(CONFIG['WindowTime'] - window_time_now)
-        totalRequests += 1
+        total_requests += 1
         obj = obj[:-1]
         rest.bucket = obj.split('\t')[0]
         rest.key = obj.split('\t')[1]
@@ -1530,7 +2096,9 @@ def get_object(process_id, user, conn, result_queue):
     request_type = 'GetObject'
     rest = obsPyCmd.OBSRequestDescriptor(request_type, ak=user.ak, sk=user.sk,
                                          auth_algorithm=CONFIG['AuthAlgorithm'], virtual_host=CONFIG['VirtualHost'],
-                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'])
+                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'],
+                                         is_cdn=CONFIG['IsCdn'], cdn_ak=CONFIG['CdnAK'], cdn_sk=CONFIG['CdnSK'],
+                                         cdn_sts_token=CONFIG['CdnSTSToken'], is_http2=CONFIG['IsHTTP2'], host=conn.host)
     if CONFIG['SrvSideEncryptType'].lower() == 'sse-c':
         rest.headers['x-amz-server-side-encryption-customer-algorithm'] = 'AES256'
     if CONFIG['Testcase'] in (202, 900) and CONFIG['Range']:
@@ -1557,8 +2125,9 @@ def get_object(process_id, user, conn, result_queue):
         rest.bucket = CONFIG['BucketNameFixed']
     if CONFIG['ObjectNameFixed']:
         rest.key = CONFIG['ObjectNameFixed']
+    start_time = None
     if CONFIG['TpsPerThread']:
-        startTime = time.time()  # 开始时间
+        start_time = time.time()  # 开始时间
     while i < CONFIG['BucketsPerUser']:
         if not CONFIG['BucketNameFixed']:
             rest.bucket = '%s.%s.%d' % (user.ak.lower(), CONFIG['BucketNamePrefix'], i)
@@ -1566,10 +2135,10 @@ def get_object(process_id, user, conn, result_queue):
         while j < CONFIG['ObjectsPerBucketPerThread']:
             if CONFIG['TpsPerThread']:  # 限制tps
                 # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求/限制TPS +　并发开始时间
-                dstTime = (i * CONFIG['ObjectsPerBucketPerThread'] + j) * 1.0 / CONFIG['TpsPerThread'] + startTime
-                waitTime = dstTime - time.time()
-                if waitTime > 0:
-                    time.sleep(waitTime)
+                dst_time = (i * CONFIG['ObjectsPerBucketPerThread'] + j) * 1.0 / CONFIG['TpsPerThread'] + start_time
+                wait_time = dst_time - time.time()
+                if wait_time > 0:
+                    time.sleep(wait_time)
             if CONFIG['WindowMode']:  # 运行窗口时间限制
                 window_time_now = (time.time() - valid_start_time.value) % CONFIG['WindowTime']
                 if window_time_now > CONFIG['RunWindowSeconds']:
@@ -1621,7 +2190,8 @@ def head_object(process_id, user, conn, result_queue):
     request_type = 'HeadObject'
     rest = obsPyCmd.OBSRequestDescriptor(request_type, ak=user.ak, sk=user.sk,
                                          auth_algorithm=CONFIG['AuthAlgorithm'], virtual_host=CONFIG['VirtualHost'],
-                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'])
+                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'],
+                                         is_http2=CONFIG['IsHTTP2'], host=conn.host)
     # 如果传入OBJECTS，则直接处理OBJECTS。
     global OBJECTS
     if OBJECTS:
@@ -1638,8 +2208,9 @@ def head_object(process_id, user, conn, result_queue):
         rest.key = CONFIG['ObjectNameFixed']
     if CONFIG['SrvSideEncryptType'].lower() == 'sse-c':
         rest.headers['x-amz-server-side-encryption-customer-algorithm'] = 'AES256'
+    start_time = None
     if CONFIG['TpsPerThread']:
-        startTime = time.time()  # 开始时间
+        start_time = time.time()  # 开始时间
     while i < CONFIG['BucketsPerUser']:
         if not CONFIG['BucketNameFixed']:
             rest.bucket = '%s.%s.%d' % (user.ak.lower(), CONFIG['BucketNamePrefix'], i)
@@ -1647,9 +2218,10 @@ def head_object(process_id, user, conn, result_queue):
         while j < CONFIG['ObjectsPerBucketPerThread']:
             if CONFIG['TpsPerThread']:  # 限制tps
                 # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求/限制TPS +　并发开始时间
-                dstTime = (i * CONFIG['ObjectsPerBucketPerThread'] + j) * 1.0 / CONFIG['TpsPerThread'] + startTime
-                waitTime = dstTime - time.time()
-                if waitTime > 0:  time.sleep(waitTime)
+                dst_time = (i * CONFIG['ObjectsPerBucketPerThread'] + j) * 1.0 / CONFIG['TpsPerThread'] + start_time
+                wait_time = dst_time - time.time()
+                if wait_time > 0:
+                    time.sleep(wait_time)
             if not CONFIG['ObjectNameFixed']:
                 if not CONFIG['ObjNamePatternHash']:
                     rest.key = CONFIG['ObjectNamePartten'].replace('processID', str(process_id)).replace('Index', str(
@@ -1679,7 +2251,8 @@ def delete_object(process_id, user, conn, result_queue):
     request_type = 'DeleteObject'
     rest = obsPyCmd.OBSRequestDescriptor(request_type, ak=user.ak, sk=user.sk,
                                          auth_algorithm=CONFIG['AuthAlgorithm'], virtual_host=CONFIG['VirtualHost'],
-                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'])
+                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'],
+                                         is_http2=CONFIG['IsHTTP2'], host=conn.host)
 
     # 如果传入OBJECTS，则直接处理OBJECTS。
     global OBJECTS, LIST_INDEX
@@ -1707,9 +2280,10 @@ def delete_object(process_id, user, conn, result_queue):
         range_arr = range(process_id % CONFIG['BucketsPerUser'], CONFIG['BucketsPerUser']) + range(0,
                                                                                                    process_id % CONFIG[
                                                                                                        'BucketsPerUser'])
+    start_time = None
     if CONFIG['TpsPerThread']:
-        startTime = time.time()  # 开始时间
-    bucketsCover = 0  # 已经遍历桶数量
+        start_time = time.time()  # 开始时间
+    buckets_cover = 0  # 已经遍历桶数量
     for i in range_arr:
         if not CONFIG['BucketNameFixed']:
             rest.bucket = '%s.%s.%d' % (user.ak.lower(), CONFIG['BucketNamePrefix'], i)
@@ -1718,11 +2292,11 @@ def delete_object(process_id, user, conn, result_queue):
         while j < CONFIG['ObjectsPerBucketPerThread']:
             if CONFIG['TpsPerThread']:  # 限制tps
                 # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求/限制TPS +　并发开始时间
-                dstTime = (bucketsCover * CONFIG['ObjectsPerBucketPerThread'] + j) * 1.0 / CONFIG[
-                    'TpsPerThread'] + startTime
-                waitTime = dstTime - time.time()
-                if waitTime > 0:
-                    time.sleep(waitTime)
+                dst_time = (buckets_cover * CONFIG['ObjectsPerBucketPerThread'] + j) * 1.0 / CONFIG[
+                    'TpsPerThread'] + start_time
+                wait_time = dst_time - time.time()
+                if wait_time > 0:
+                    time.sleep(wait_time)
             if CONFIG['WindowMode']:  # 运行窗口时间限制
                 window_time_now = (time.time() - valid_start_time.value) % CONFIG['WindowTime']
                 if window_time_now > CONFIG['RunWindowSeconds']:
@@ -1761,14 +2335,15 @@ def delete_object(process_id, user, conn, result_queue):
                 (process_id, user.username, rest.recordUrl, request_type, resp.start_time,
                  resp.end_time, resp.send_bytes, resp.recv_bytes, '', resp.request_id, resp.status, resp.id2))
             j += 1
-        bucketsCover += 1
+        buckets_cover += 1
 
 
 def restore_object(process_id, user, conn, result_queue):
     request_type = 'RestoreObject'
     rest = obsPyCmd.OBSRequestDescriptor(request_type, ak=user.ak, sk=user.sk,
                                          auth_algorithm=CONFIG['AuthAlgorithm'], virtual_host=CONFIG['VirtualHost'],
-                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'])
+                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'],
+                                         is_http2=CONFIG['IsHTTP2'], host=conn.host)
 
     # 如果传入OBJECTS，则直接处理OBJECTS。
     global OBJECTS
@@ -1795,8 +2370,9 @@ def restore_object(process_id, user, conn, result_queue):
     if CONFIG['ObjectNameFixed']:
         rest.key = CONFIG['ObjectNameFixed']
     rest.queryArgs['restore'] = None
+    start_time = None
     if CONFIG['TpsPerThread']:
-        startTime = time.time()  # 开始时间
+        start_time = time.time()  # 开始时间
     i = 0
     while i < CONFIG['BucketsPerUser']:
         if not CONFIG['BucketNameFixed']:
@@ -1805,9 +2381,10 @@ def restore_object(process_id, user, conn, result_queue):
         while j < CONFIG['ObjectsPerBucketPerThread']:
             if CONFIG['TpsPerThread']:  # 限制tps
                 # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求/限制TPS +　并发开始时间
-                dstTime = (i * CONFIG['ObjectsPerBucketPerThread'] + j) * 1.0 / CONFIG['TpsPerThread'] + startTime
-                waitTime = dstTime - time.time()
-                if waitTime > 0:  time.sleep(waitTime)
+                dst_time = (i * CONFIG['ObjectsPerBucketPerThread'] + j) * 1.0 / CONFIG['TpsPerThread'] + start_time
+                wait_time = dst_time - time.time()
+                if wait_time > 0:
+                    time.sleep(wait_time)
             if not CONFIG['ObjectNameFixed']:
                 if not CONFIG['ObjNamePatternHash']:
                     rest.key = CONFIG['ObjectNamePartten'].replace('processID', str(process_id)).replace('Index', str(
@@ -1842,13 +2419,15 @@ def delete_multi_objects(process_id, user, conn, result_queue):
     request_type = 'DeleteMultiObjects'
     rest = obsPyCmd.OBSRequestDescriptor(request_type, ak=user.ak, sk=user.sk,
                                          auth_algorithm=CONFIG['AuthAlgorithm'], virtual_host=CONFIG['VirtualHost'],
-                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'])
+                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'],
+                                         is_http2=CONFIG['IsHTTP2'], host=conn.host)
     rest.queryArgs['delete'] = None
     i = 0
     if CONFIG['BucketNameFixed']:
         rest.bucket = CONFIG['BucketNameFixed']
+    start_time = None
     if CONFIG['TpsPerThread']:
-        startTime = time.time()  # 开始时间
+        start_time = time.time()  # 开始时间
     while i < CONFIG['BucketsPerUser']:
         if not CONFIG['BucketNameFixed']:
             rest.bucket = '%s.%s.%d' % (user.ak.lower(), CONFIG['BucketNamePrefix'], i)
@@ -1861,11 +2440,12 @@ def delete_multi_objects(process_id, user, conn, result_queue):
         while j < CONFIG['ObjectsPerBucketPerThread']:
             if CONFIG['TpsPerThread']:  # 限制tps
                 # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求/限制TPS +　并发开始时间
-                dstTime = (i * math.ceil(CONFIG['ObjectsPerBucketPerThread'] / CONFIG['DeleteObjectsPerRequest']) + j /
+                dst_time = (i * math.ceil(CONFIG['ObjectsPerBucketPerThread'] / CONFIG['DeleteObjectsPerRequest']) + j /
                            CONFIG[
-                               'DeleteObjectsPerRequest']) * 1.0 / CONFIG['TpsPerThread'] + startTime
-                waitTime = dstTime - time.time()
-                if waitTime > 0:  time.sleep(waitTime)
+                               'DeleteObjectsPerRequest']) * 1.0 / CONFIG['TpsPerThread'] + start_time
+                wait_time = dst_time - time.time()
+                if wait_time > 0:
+                    time.sleep(wait_time)
             rest.sendContent = '<Delete>'
             k = 0
             while k < CONFIG['DeleteObjectsPerRequest']:
@@ -1901,14 +2481,15 @@ def copy_object(process_id, user, conn, result_queue):
     request_type = 'CopyObject'
     rest = obsPyCmd.OBSRequestDescriptor(request_type, ak=user.ak, sk=user.sk,
                                          auth_algorithm=CONFIG['AuthAlgorithm'], virtual_host=CONFIG['VirtualHost'],
-                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'])
+                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'],
+                                         is_http2=CONFIG['IsHTTP2'], host=conn.host)
     rest.headers['x-amz-acl'] = 'public-read-write'
     rest.headers['x-amz-metadata-directive'] = 'COPY'
     if CONFIG['copySrcObjFixed']:
         rest.headers['x-amz-copy-source'] = '/' + CONFIG['copySrcObjFixed']
-    if CONFIG['copyDstObjFiexed']:
-        rest.bucket = CONFIG['copyDstObjFiexed'].split('/')[0]
-        rest.key = CONFIG['copyDstObjFiexed'].split('/')[1]
+    if CONFIG['copyDstObjFixed']:
+        rest.bucket = CONFIG['copyDstObjFixed'].split('/')[0]
+        rest.key = CONFIG['copyDstObjFixed'].split('/')[1]
     elif CONFIG['BucketNameFixed']:
         rest.bucket = CONFIG['BucketNameFixed']
     if CONFIG['SrvSideEncryptType'].lower() == 'sse-c':
@@ -1923,43 +2504,33 @@ def copy_object(process_id, user, conn, result_queue):
             rest.headers['x-amz-server-side-encryption-context'] = CONFIG['SrvSideEncryptContext']
     elif CONFIG['SrvSideEncryptType'].lower() == 'sse-kms' and CONFIG['SrvSideEncryptAlgorithm'].lower() == 'aes256':
         rest.headers['x-amz-server-side-encryption'] = 'AES256'
+    start_time = None
     if CONFIG['TpsPerThread']:
-        startTime = time.time()  # 开始时间
+        start_time = time.time()  # 开始时间
     i = 0
     while i < CONFIG['BucketsPerUser']:
         # 如果未配置目的对象和固定桶，设置目的桶为源对象所在的桶
-        if not CONFIG['copyDstObjFiexed'] and not CONFIG['BucketNameFixed']:
+        if not CONFIG['copyDstObjFixed'] and not CONFIG['BucketNameFixed']:
             rest.bucket = '%s.%s.%d' % (user.ak.lower(), CONFIG['BucketNamePrefix'], i)
         j = 0
         while j < CONFIG['ObjectsPerBucketPerThread']:
             if CONFIG['TpsPerThread']:  # 限制tps
                 # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求/限制TPS +　并发开始时间
-                dstTime = (i * CONFIG['ObjectsPerBucketPerThread'] + j) * 1.0 / CONFIG['TpsPerThread'] + startTime
-                waitTime = dstTime - time.time()
-                if waitTime > 0:  time.sleep(waitTime)
-            if not CONFIG['copyDstObjFiexed']:
+                dst_time = (i * CONFIG['ObjectsPerBucketPerThread'] + j) * 1.0 / CONFIG['TpsPerThread'] + start_time
+                wait_time = dst_time - time.time()
+                if wait_time > 0:
+                    time.sleep(wait_time)
+            if not CONFIG['copyDstObjFixed']:
                 if not CONFIG['ObjNamePatternHash']:
-                    rest.key = CONFIG['ObjectNamePartten'].replace('processID', str(process_id)).replace('Index',
-                                                                                                         str(
-                                                                                                             j)).replace(
-                        'ObjectNamePrefix', CONFIG['ObjectNamePrefix'] + '.copy')
+                    rest.key = CONFIG['ObjectNamePartten'].replace('processID', str(process_id)).replace('Index', str(j)).replace('ObjectNamePrefix', CONFIG['ObjectNamePrefix'] + '.copy')
                 else:
-                    object_name = CONFIG['ObjectNamePartten'].replace('processID', str(process_id)).replace('Index',
-                                                                                                            str(
-                                                                                                                j)).replace(
-                        'ObjectNamePrefix', CONFIG['ObjectNamePrefix'])
+                    object_name = CONFIG['ObjectNamePartten'].replace('processID', str(process_id)).replace('Index', str(j)).replace('ObjectNamePrefix', CONFIG['ObjectNamePrefix'] + '.copy')
                     rest.key = hashlib.md5(object_name).hexdigest() + '-' + object_name
             if not CONFIG['copySrcObjFixed']:
                 if not CONFIG['ObjNamePatternHash']:
-                    rest.headers['x-amz-copy-source'] = '/%s/%s' % (
-                        rest.bucket, CONFIG['ObjectNamePartten'].replace('processID', str(
-                            process_id)).replace('Index', str(j)).replace('ObjectNamePrefix',
-                                                                          CONFIG['ObjectNamePrefix']))
+                    rest.headers['x-amz-copy-source'] = '/%s/%s' % (rest.bucket, CONFIG['ObjectNamePartten'].replace('processID', str(process_id)).replace('Index', str(j)).replace('ObjectNamePrefix', CONFIG['ObjectNamePrefix']))
                 else:
-                    object_name = CONFIG['ObjectNamePartten'].replace('processID', str(process_id)).replace('Index',
-                                                                                                            str(
-                                                                                                                j)).replace(
-                        'ObjectNamePrefix', CONFIG['ObjectNamePrefix'])
+                    object_name = CONFIG['ObjectNamePartten'].replace('processID', str(process_id)).replace('Index', str(j)).replace('ObjectNamePrefix', CONFIG['ObjectNamePrefix'])
                     key = hashlib.md5(object_name).hexdigest() + '-' + object_name
                     rest.headers['x-amz-copy-source'] = '/%s/%s' % (rest.bucket, key)
             if CONFIG['copySrcSrvSideEncryptType'].lower() == 'sse-c':
@@ -1987,16 +2558,17 @@ def copy_object(process_id, user, conn, result_queue):
 
 
 def init_multi_upload(process_id, user, conn, result_queue):
-    if not CONFIG['ObjectLexical']:
-        logging.warn('Object name is not lexical, exit..')
-        return
+    # if not CONFIG['ObjectLexical']:
+    #     logging.warn('Object name is not lexical, exit..')
+    #     return
     if CONFIG['ObjectsPerBucketPerThread'] <= 0 or CONFIG['BucketsPerUser'] <= 0:
         logging.warn('ObjectsPerBucketPerThread or BucketsPerUser <= 0, exit..')
         return
     request_type = 'InitMultiUpload'
     rest = obsPyCmd.OBSRequestDescriptor(request_type, ak=user.ak, sk=user.sk,
                                          auth_algorithm=CONFIG['AuthAlgorithm'], virtual_host=CONFIG['VirtualHost'],
-                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'])
+                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'],
+                                         is_http2=CONFIG['IsHTTP2'], host=conn.host)
     rest.queryArgs['uploads'] = None
     if CONFIG['MultiUploadStorageClass']:
         if CONFIG['MultiUploadStorageClass'][-1:] == ',':
@@ -2022,8 +2594,11 @@ def init_multi_upload(process_id, user, conn, result_queue):
             rest.headers['x-amz-server-side-encryption-context'] = CONFIG['SrvSideEncryptContext']
     elif CONFIG['SrvSideEncryptType'].lower() == 'sse-kms' and CONFIG['SrvSideEncryptAlgorithm'].lower() == 'aes256':
         rest.headers['x-amz-server-side-encryption'] = 'AES256'
+    if CONFIG['Expires']:
+        rest.headers['x-obs-expires'] = CONFIG['Expires']
+    start_time = None
     if CONFIG['TpsPerThread']:
-        startTime = time.time()  # 开始时间
+        start_time = time.time()  # 开始时间
     upload_ids = ''
     i = 0
     while i < CONFIG['BucketsPerUser']:
@@ -2033,21 +2608,25 @@ def init_multi_upload(process_id, user, conn, result_queue):
         while j < CONFIG['ObjectsPerBucketPerThread']:
             if CONFIG['TpsPerThread']:  # 限制tps
                 # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求/限制TPS +　并发开始时间
-                dstTime = (i * CONFIG['ObjectsPerBucketPerThread'] + j) * 1.0 / CONFIG['TpsPerThread'] + startTime
-                waitTime = dstTime - time.time()
-                if waitTime > 0:  time.sleep(waitTime)
+                dst_time = (i * CONFIG['ObjectsPerBucketPerThread'] + j) * 1.0 / CONFIG['TpsPerThread'] + start_time
+                wait_time = dst_time - time.time()
+                if wait_time > 0:
+                    time.sleep(wait_time)
             if not CONFIG['ObjectNameFixed']:
-                if not CONFIG['ObjNamePatternHash']:
-                    rest.key = CONFIG['ObjectNamePartten'].replace('processID', str(process_id)).replace('Index',
-                                                                                                         str(
-                                                                                                             j)).replace(
-                        'ObjectNamePrefix', CONFIG['ObjectNamePrefix'])
+                if CONFIG['ObjectLexical']:
+                    if not CONFIG['ObjNamePatternHash']:
+                        rest.key = CONFIG['ObjectNamePartten'].replace('processID', str(process_id)).replace('Index',
+                                                                                                             str(
+                                                                                                                 j)).replace(
+                            'ObjectNamePrefix', CONFIG['ObjectNamePrefix'])
+                    else:
+                        object_name = CONFIG['ObjectNamePartten'].replace('processID', str(process_id)).replace('Index',
+                                                                                                                str(
+                                                                                                                    j)).replace(
+                            'ObjectNamePrefix', CONFIG['ObjectNamePrefix'])
+                        rest.key = hashlib.md5(object_name).hexdigest() + '-' + object_name
                 else:
-                    object_name = CONFIG['ObjectNamePartten'].replace('processID', str(process_id)).replace('Index',
-                                                                                                            str(
-                                                                                                                j)).replace(
-                        'ObjectNamePrefix', CONFIG['ObjectNamePrefix'])
-                    rest.key = hashlib.md5(object_name).hexdigest() + '-' + object_name
+                    rest.key = Util.random_string_create(random.randint(300, 900))
             if CONFIG['SrvSideEncryptType'].lower() == 'sse-c':
                 rest.headers['x-amz-server-side-encryption-customer-key'] = base64.b64encode(rest.key[-32:].zfill(32))
                 rest.headers['x-amz-server-side-encryption-customer-key-MD5'] = base64.b64encode(
@@ -2123,14 +2702,15 @@ def upload_part(process_id, user, conn, result_queue):
     request_type = 'UploadPart'
     rest = obsPyCmd.OBSRequestDescriptor(request_type, ak=user.ak, sk=user.sk,
                                          auth_algorithm=CONFIG['AuthAlgorithm'], virtual_host=CONFIG['VirtualHost'],
-                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'])
+                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'],
+                                         is_http2=CONFIG['IsHTTP2'], host=conn.host)
     rest.headers['content-type'] = 'application/octet-stream'
     if CONFIG['SrvSideEncryptType'].lower() == 'sse-c':
         rest.headers['x-amz-server-side-encryption-customer-algorithm'] = 'AES256'
-
+    start_time = None
     if CONFIG['TpsPerThread']:
-        startTime = time.time()  # 开始时间
-    totalRequests = 0
+        start_time = time.time()  # 开始时间
+    total_requests = 0
     for upload_id in upload_ids:
         rest.bucket = upload_id[1]
         rest.key = upload_id[2]
@@ -2150,10 +2730,10 @@ def upload_part(process_id, user, conn, result_queue):
         for i in part_ids:
             if CONFIG['TpsPerThread']:  # 限制tps
                 # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求 / 限制TPS + 并发开始时间
-                dstTime = totalRequests * 1.0 / CONFIG['TpsPerThread'] + startTime
-                waitTime = dstTime - time.time()
-                if waitTime > 0:
-                    time.sleep(waitTime)
+                dst_time = total_requests * 1.0 / CONFIG['TpsPerThread'] + start_time
+                wait_time = dst_time - time.time()
+                if wait_time > 0:
+                    time.sleep(wait_time)
             rest.queryArgs['partNumber'] = str(i)
             if CONFIG['SrvSideEncryptType'].lower() == 'sse-c':
                 rest.headers['x-amz-server-side-encryption-customer-key'] = base64.b64encode(rest.key[-32:].zfill(32))
@@ -2167,7 +2747,7 @@ def upload_part(process_id, user, conn, result_queue):
                 result_queue.put(
                     (process_id, user.username, rest.recordUrl, request_type, resp.start_time, resp.end_time,
                      resp.send_bytes, resp.recv_bytes, resp.return_data, resp.request_id, resp.status, resp.id2))
-                totalRequests += 1
+                total_requests += 1
             if resp.status.startswith('200 '):
                 parts_record += '%d:%s,' % (i, resp.return_data)
         upload_id.append(parts_record)
@@ -2238,14 +2818,16 @@ def copy_part(process_id, user, conn, result_queue):
     request_type = 'CopyPart'
     rest = obsPyCmd.OBSRequestDescriptor(request_type, ak=user.ak, sk=user.sk,
                                          auth_algorithm=CONFIG['AuthAlgorithm'], virtual_host=CONFIG['VirtualHost'],
-                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'])
+                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'],
+                                         is_http2=CONFIG['IsHTTP2'], host=conn.host)
     if CONFIG['SrvSideEncryptType'].lower() == 'sse-c':
         rest.headers['x-amz-server-side-encryption-customer-algorithm'] = 'AES256'
     if CONFIG['copySrcSrvSideEncryptType'].lower() == 'sse-c':
         rest.headers['x-amz-copy-source-server-side-encryption-customer-algorithm'] = 'AES256'
+    start_time = None
     if CONFIG['TpsPerThread']:
-        startTime = time.time()  # 开始时间
-    totalRequests = 0
+        start_time = time.time()  # 开始时间
+    total_requests = 0
     parts_record = ''
     for upload_id in upload_ids:
         rest.bucket = upload_id[1]
@@ -2265,9 +2847,10 @@ def copy_part(process_id, user, conn, result_queue):
         for i in part_ids:
             if CONFIG['TpsPerThread']:  # 限制tps
                 # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求 / 限制TPS + 并发开始时间
-                dstTime = totalRequests * 1.0 / CONFIG['TpsPerThread'] + startTime
-                waitTime = dstTime - time.time()
-                if waitTime > 0:  time.sleep(waitTime)
+                dst_time = total_requests * 1.0 / CONFIG['TpsPerThread'] + start_time
+                wait_time = dst_time - time.time()
+                if wait_time > 0:
+                    time.sleep(wait_time)
             rest.queryArgs['partNumber'] = str(i)
             if not fixed_size:
                 range_size, fixed_size = Util.generate_a_size(CONFIG['PartSize'])
@@ -2275,7 +2858,7 @@ def copy_part(process_id, user, conn, result_queue):
             range_start_index = random.randint(0, int(CONFIG['PartSize']) - range_size)
             logging.debug('range_start_index:%d' % range_start_index)
             rest.headers['x-amz-copy-source-range'] = 'bytes=%d-%d' % (
-                range_start_index, range_start_index + range_size)
+                range_start_index, range_start_index + range_size - 1)
             logging.debug('x-amz-copy-source-range:[%s]' % rest.headers['x-amz-copy-source-range'])
             # 增加服务器端加密头域
             if CONFIG['copySrcSrvSideEncryptType'].lower() == 'sse-c':
@@ -2302,7 +2885,7 @@ def copy_part(process_id, user, conn, result_queue):
                      'x-amz-copy-source-range'], resp.request_id, resp.status, resp.id2))
             if resp.status.startswith('200 '):
                 parts_record += '%d:%s,' % (i, resp.return_data)
-            totalRequests += 1
+            total_requests += 1
         upload_id.append(parts_record)
     # 记录各段信息到本地文件 ，parts_etag-x.dat，格式：桶名\t对象名\tupload_id\tpartNo:Etag,partNo:Etag,...
     part_record_file = 'data/parts_etag-%d.dat' % process_id
@@ -2371,17 +2954,20 @@ def complete_multi_upload(process_id, user, conn, result_queue):
     request_type = 'CompleteMultiUpload'
     rest = obsPyCmd.OBSRequestDescriptor(request_type, ak=user.ak, sk=user.sk,
                                          auth_algorithm=CONFIG['AuthAlgorithm'], virtual_host=CONFIG['VirtualHost'],
-                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'])
+                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'],
+                                         is_http2=CONFIG['IsHTTP2'], host=conn.host)
     rest.headers['content-type'] = 'application/xml'
+    start_time = None
     if CONFIG['TpsPerThread']:
-        startTime = time.time()  # 开始时间
-    totalRequests = 0
+        start_time = time.time()  # 开始时间
+    total_requests = 0
     for key, value in part_etags.items():
         if CONFIG['TpsPerThread']:  # 限制tps
             # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求 / 限制TPS + 并发开始时间
-            dstTime = totalRequests * 1.0 / CONFIG['TpsPerThread'] + startTime
-            waitTime = dstTime - time.time()
-            if waitTime > 0:  time.sleep(waitTime)
+            dst_time = total_requests * 1.0 / CONFIG['TpsPerThread'] + start_time
+            wait_time = dst_time - time.time()
+            if wait_time > 0:
+                time.sleep(wait_time)
         rest.bucket = value[0]
         rest.key = value[1]
         rest.queryArgs['uploadId'] = key
@@ -2404,7 +2990,7 @@ def complete_multi_upload(process_id, user, conn, result_queue):
         result_queue.put(
             (process_id, user.username, rest.recordUrl, request_type, resp.start_time,
              resp.end_time, resp.send_bytes, resp.recv_bytes, '', resp.request_id, resp.status, resp.id2))
-        totalRequests += 1
+        total_requests += 1
 
 
 def abort_multi_upload(process_id, user, conn, result_queue):
@@ -2436,35 +3022,40 @@ def abort_multi_upload(process_id, user, conn, result_queue):
     request_type = 'AbortMultiUpload'
     rest = obsPyCmd.OBSRequestDescriptor(request_type, ak=user.ak, sk=user.sk,
                                          auth_algorithm=CONFIG['AuthAlgorithm'], virtual_host=CONFIG['VirtualHost'],
-                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'])
+                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'],
+                                         is_http2=CONFIG['IsHTTP2'], host=conn.host)
+    start_time = None
     if CONFIG['TpsPerThread']:
-        startTime = time.time()  # 开始时间
-    totalRequests = 0
+        start_time = time.time()  # 开始时间
+    total_requests = 0
     for upload_id in upload_ids:
         rest.bucket = upload_id[1]
         rest.key = upload_id[2]
         rest.queryArgs['uploadId'] = upload_id[3]
         if CONFIG['TpsPerThread']:  # 限制tps
             # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求 / 限制TPS + 并发开始时间
-            dstTime = totalRequests * 1.0 / CONFIG['TpsPerThread'] + startTime
-            waitTime = dstTime - time.time()
-            if waitTime > 0:  time.sleep(waitTime)
+            dst_time = total_requests * 1.0 / CONFIG['TpsPerThread'] + start_time
+            wait_time = dst_time - time.time()
+            if wait_time > 0:
+                time.sleep(wait_time)
         resp = obsPyCmd.OBSRequestHandler(rest, conn).make_request(cal_md5=CONFIG['CalHashMD5'])
         result_queue.put(
             (process_id, user.username, rest.recordUrl, request_type, resp.start_time,
              resp.end_time, resp.send_bytes, resp.recv_bytes, '', resp.request_id, resp.status, resp.id2))
-        totalRequests += 1
+        total_requests += 1
 
 
 def multi_parts_upload(process_id, user, conn, result_queue):
     rest = obsPyCmd.OBSRequestDescriptor(request_type='', ak=user.ak, sk=user.sk,
                                          auth_algorithm=CONFIG['AuthAlgorithm'], virtual_host=CONFIG['VirtualHost'],
-                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'])
+                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'],
+                                         is_http2=CONFIG['IsHTTP2'], host=conn.host)
     rest.bucket = CONFIG['BucketNameFixed']
     rest.key = CONFIG['ObjectNameFixed']
+    start_time = None
     if CONFIG['TpsPerThread']:
-        startTime = time.time()  # 开始时间
-    totalRequests = 0
+        start_time = time.time()  # 开始时间
+    total_requests = 0
     i = 0
     while i < CONFIG['BucketsPerUser']:
         if not CONFIG['BucketNameFixed']:
@@ -2510,14 +3101,15 @@ def multi_parts_upload(process_id, user, conn, result_queue):
                 rest.headers['x-amz-server-side-encryption'] = 'AES256'
             if CONFIG['TpsPerThread']:  # 限制tps
                 # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求 / 限制TPS + 并发开始时间
-                dstTime = totalRequests * 1.0 / CONFIG['TpsPerThread'] + startTime
-                waitTime = dstTime - time.time()
-                if waitTime > 0:  time.sleep(waitTime)
+                dst_time = total_requests * 1.0 / CONFIG['TpsPerThread'] + start_time
+                wait_time = dst_time - time.time()
+                if wait_time > 0:
+                    time.sleep(wait_time)
             resp = obsPyCmd.OBSRequestHandler(rest, conn).make_request()
             result_queue.put(
                 (process_id, user.username, rest.recordUrl, rest.requestType, resp.start_time,
                  resp.end_time, resp.send_bytes, resp.recv_bytes, '', resp.request_id, resp.status, resp.id2))
-            totalRequests += 1
+            total_requests += 1
             upload_id = resp.return_data
             logging.info("upload id: %s" % upload_id)
             # 2. 串行上传多段
@@ -2541,10 +3133,10 @@ def multi_parts_upload(process_id, user, conn, result_queue):
                         hashlib.md5(rest.key[-32:].zfill(32)).digest())
                 if CONFIG['TpsPerThread']:  # 限制tps
                     # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求 / 限制TPS + 并发开始时间
-                    dstTime = totalRequests * 1.0 / CONFIG['TpsPerThread'] + startTime
-                    waitTime = dstTime - time.time()
-                    if waitTime > 0:
-                        time.sleep(waitTime)
+                    dst_time = total_requests * 1.0 / CONFIG['TpsPerThread'] + start_time
+                    wait_time = dst_time - time.time()
+                    if wait_time > 0:
+                        time.sleep(wait_time)
                 for _ in xrange(CONFIG['PutTimesForOnePart']):
                     if not fixed_size:
                         rest.contentLength, fixed_size = Util.generate_a_size(CONFIG['PartSize'])
@@ -2553,7 +3145,7 @@ def multi_parts_upload(process_id, user, conn, result_queue):
                     result_queue.put(
                         (process_id, user.username, rest.recordUrl, rest.requestType, resp.start_time,
                          resp.end_time, resp.send_bytes, resp.recv_bytes, '', resp.request_id, resp.status, resp.id2))
-                    totalRequests += 1
+                    total_requests += 1
                 if resp.status.startswith('200 '):
                     part_etags[part_number] = resp.return_data
                 part_number += 1
@@ -2571,14 +3163,15 @@ def multi_parts_upload(process_id, user, conn, result_queue):
             rest.sendContent += '</CompleteMultipartUpload>'
             if CONFIG['TpsPerThread']:  # 限制tps
                 # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求 / 限制TPS + 并发开始时间
-                dstTime = totalRequests * 1.0 / CONFIG['TpsPerThread'] + startTime
-                waitTime = dstTime - time.time()
-                if waitTime > 0:  time.sleep(waitTime)
+                dst_time = total_requests * 1.0 / CONFIG['TpsPerThread'] + start_time
+                wait_time = dst_time - time.time()
+                if wait_time > 0:
+                    time.sleep(wait_time)
             resp = obsPyCmd.OBSRequestHandler(rest, conn).make_request()
             result_queue.put(
                 (process_id, user.username, rest.recordUrl, rest.requestType, resp.start_time,
                  resp.end_time, resp.send_bytes, resp.recv_bytes, '', resp.request_id, resp.status, resp.id2))
-            totalRequests += 1
+            total_requests += 1
             j += 1
         i += 1
 
@@ -2611,10 +3204,12 @@ def get_object_upload(process_id, user, conn, result_queue):
     request_type = 'GetObjectUpload'
     rest = obsPyCmd.OBSRequestDescriptor(request_type, ak=user.ak, sk=user.sk,
                                          auth_algorithm=CONFIG['AuthAlgorithm'], virtual_host=CONFIG['VirtualHost'],
-                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'])
+                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'],
+                                         is_http2=CONFIG['IsHTTP2'], host=conn.host)
+    start_time = None
     if CONFIG['TpsPerThread']:
-        startTime = time.time()  # 开始时间
-    totalRequests = 0
+        start_time = time.time()  # 开始时间
+    total_requests = 0
     for upload_id in upload_ids:
         rest.bucket = upload_id[1]
         rest.key = upload_id[2]
@@ -2625,10 +3220,10 @@ def get_object_upload(process_id, user, conn, result_queue):
             rest.queryArgs['uploadId'] = upload_id[3]
         if CONFIG['TpsPerThread']:  # 限制tps
             # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求 / 限制TPS + 并发开始时间
-            dstTime = totalRequests * 1.0 / CONFIG['TpsPerThread'] + startTime
-            waitTime = dstTime - time.time()
-            if waitTime > 0:
-                time.sleep(waitTime)
+            dst_time = total_requests * 1.0 / CONFIG['TpsPerThread'] + start_time
+            wait_time = dst_time - time.time()
+            if wait_time > 0:
+                time.sleep(wait_time)
         resp = obsPyCmd.OBSRequestHandler(rest, conn).make_request(cal_md5=CONFIG['CalHashMD5'])
         result_queue.put(
             (process_id, user.username, rest.recordUrl, request_type, resp.start_time,
@@ -2639,7 +3234,8 @@ def put_object_acl(process_id, user, conn, result_queue):
     request_type = 'PutObjectAcl'
     rest = obsPyCmd.OBSRequestDescriptor(request_type, ak=user.ak, sk=user.sk,
                                          auth_algorithm=CONFIG['AuthAlgorithm'], virtual_host=CONFIG['VirtualHost'],
-                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'])
+                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'],
+                                         is_http2=CONFIG['IsHTTP2'], host=conn.host)
     if CONFIG['SrvSideEncryptType'].lower() == 'sse-c':
         rest.headers['x-amz-server-side-encryption-customer-algorithm'] = 'AES256'
     if CONFIG['Testcase'] in (202, 900) and CONFIG['Range']:
@@ -2667,8 +3263,9 @@ def put_object_acl(process_id, user, conn, result_queue):
         rest.bucket = CONFIG['BucketNameFixed']
     if CONFIG['ObjectNameFixed']:
         rest.key = CONFIG['ObjectNameFixed']
+    start_time = None
     if CONFIG['TpsPerThread']:
-        startTime = time.time()  # 开始时间
+        start_time = time.time()  # 开始时间
     rest.queryArgs["acl"] = None
     rest.headers["x-amz-acl"] = 'public-read'
     while i < CONFIG['BucketsPerUser']:
@@ -2678,9 +3275,10 @@ def put_object_acl(process_id, user, conn, result_queue):
         while j < CONFIG['ObjectsPerBucketPerThread']:
             if CONFIG['TpsPerThread']:  # 限制tps
                 # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求/限制TPS +　并发开始时间
-                dstTime = (i * CONFIG['ObjectsPerBucketPerThread'] + j) * 1.0 / CONFIG['TpsPerThread'] + startTime
-                waitTime = dstTime - time.time()
-                if waitTime > 0:  time.sleep(waitTime)
+                dst_time = (i * CONFIG['ObjectsPerBucketPerThread'] + j) * 1.0 / CONFIG['TpsPerThread'] + start_time
+                wait_time = dst_time - time.time()
+                if wait_time > 0:
+                    time.sleep(wait_time)
             if CONFIG['Range']:
                 rest.headers['Range'] = 'bytes=%s' % random.choice(CONFIG['Range'].split(';')).strip()
 
@@ -2714,7 +3312,8 @@ def get_object_acl(process_id, user, conn, result_queue):
     request_type = 'GetObjectAcl'
     rest = obsPyCmd.OBSRequestDescriptor(request_type, ak=user.ak, sk=user.sk,
                                          auth_algorithm=CONFIG['AuthAlgorithm'], virtual_host=CONFIG['VirtualHost'],
-                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'])
+                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'],
+                                         is_http2=CONFIG['IsHTTP2'], host=conn.host)
     if CONFIG['SrvSideEncryptType'].lower() == 'sse-c':
         rest.headers['x-amz-server-side-encryption-customer-algorithm'] = 'AES256'
     if CONFIG['Testcase'] in (202, 900) and CONFIG['Range']:
@@ -2741,8 +3340,9 @@ def get_object_acl(process_id, user, conn, result_queue):
         rest.bucket = CONFIG['BucketNameFixed']
     if CONFIG['ObjectNameFixed']:
         rest.key = CONFIG['ObjectNameFixed']
+    start_time = None
     if CONFIG['TpsPerThread']:
-        startTime = time.time()  # 开始时间
+        start_time = time.time()  # 开始时间
     rest.queryArgs["acl"] = None
     while i < CONFIG['BucketsPerUser']:
         if not CONFIG['BucketNameFixed']:
@@ -2751,9 +3351,10 @@ def get_object_acl(process_id, user, conn, result_queue):
         while j < CONFIG['ObjectsPerBucketPerThread']:
             if CONFIG['TpsPerThread']:  # 限制tps
                 # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求/限制TPS +　并发开始时间
-                dstTime = (i * CONFIG['ObjectsPerBucketPerThread'] + j) * 1.0 / CONFIG['TpsPerThread'] + startTime
-                waitTime = dstTime - time.time()
-                if waitTime > 0:  time.sleep(waitTime)
+                dst_time = (i * CONFIG['ObjectsPerBucketPerThread'] + j) * 1.0 / CONFIG['TpsPerThread'] + start_time
+                wait_time = dst_time - time.time()
+                if wait_time > 0:
+                    time.sleep(wait_time)
             if CONFIG['Range']:
                 rest.headers['Range'] = 'bytes=%s' % random.choice(CONFIG['Range'].split(';')).strip()
             if not CONFIG['ObjectNameFixed']:
@@ -2786,7 +3387,8 @@ def options_object(process_id, user, conn, result_queue):
     request_type = 'OptionsObject'
     rest = obsPyCmd.OBSRequestDescriptor(request_type, ak=user.ak, sk=user.sk,
                                          auth_algorithm=CONFIG['AuthAlgorithm'], virtual_host=CONFIG['VirtualHost'],
-                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'])
+                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'],
+                                         is_http2=CONFIG['IsHTTP2'], host=conn.host)
     # rest.headers['Access-Control-Request-Method'] = CONFIG['AllowedMethod']
     if CONFIG['AllowedMethod']:
         if ',' in CONFIG['AllowedMethod']:
@@ -2820,8 +3422,9 @@ def options_object(process_id, user, conn, result_queue):
         rest.bucket = CONFIG['BucketNameFixed']
     if CONFIG['ObjectNameFixed']:
         rest.key = CONFIG['ObjectNameFixed']
+    start_time = None
     if CONFIG['TpsPerThread']:
-        startTime = time.time()  # 开始时间
+        start_time = time.time()  # 开始时间
     while i < CONFIG['BucketsPerUser']:
         if not CONFIG['BucketNameFixed']:
             rest.bucket = '%s.%s.%d' % (user.ak.lower(), CONFIG['BucketNamePrefix'], i)
@@ -2829,9 +3432,10 @@ def options_object(process_id, user, conn, result_queue):
         while j < CONFIG['ObjectsPerBucketPerThread']:
             if CONFIG['TpsPerThread']:  # 限制tps
                 # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求/限制TPS +　并发开始时间
-                dstTime = (i * CONFIG['ObjectsPerBucketPerThread'] + j) * 1.0 / CONFIG['TpsPerThread'] + startTime
-                waitTime = dstTime - time.time()
-                if waitTime > 0:  time.sleep(waitTime)
+                dst_time = (i * CONFIG['ObjectsPerBucketPerThread'] + j) * 1.0 / CONFIG['TpsPerThread'] + start_time
+                wait_time = dst_time - time.time()
+                if wait_time > 0:
+                    time.sleep(wait_time)
             if CONFIG['Range']:
                 rest.headers['Range'] = 'bytes=%s' % random.choice(CONFIG['Range'].split(';')).strip()
             if not CONFIG['ObjectNameFixed']:
@@ -2864,7 +3468,8 @@ def post_object(process_id, user, conn, result_queue):
     request_type = 'PostObject'
     rest = obsPyCmd.OBSRequestDescriptor(request_type, ak=user.ak, sk=user.sk,
                                          auth_algorithm=CONFIG['AuthAlgorithm'], virtual_host=CONFIG['VirtualHost'],
-                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'])
+                                         domain_name=CONFIG['DomainName'], region=CONFIG['Region'],
+                                         is_http2=CONFIG['IsHTTP2'], host=conn.host)
     rest.headers['content-type'] = 'multipart/form-data; boundary=---------------------------7db143f50da2 '
     fixed_size = False
     if CONFIG['BucketNameFixed']:
@@ -2884,9 +3489,10 @@ def post_object(process_id, user, conn, result_queue):
         range_arr = range(process_id % CONFIG['BucketsPerUser'], CONFIG['BucketsPerUser']) + range(0,
                                                                                                    process_id % CONFIG[
                                                                                                        'BucketsPerUser'])
+    start_time = None
     if CONFIG['TpsPerThread']:
-        startTime = time.time()  # 开始时间
-    bucketsCover = 0  # 已经遍历桶数量
+        start_time = time.time()  # 开始时间
+    buckets_cover = 0  # 已经遍历桶数量
     for i in range_arr:
         if not CONFIG['BucketNameFixed']:
             rest.bucket = '%s.%s.%d' % (user.ak.lower(), CONFIG['BucketNamePrefix'], i)
@@ -2909,12 +3515,13 @@ def post_object(process_id, user, conn, result_queue):
             while put_times_for_one_obj > 0:
                 if CONFIG['TpsPerThread']:  # 限制tps
                     # 按限制的tps数计算当前应该到的时间。计算方法： 当前已完成的请求/限制TPS +　并发开始时间
-                    dstTime = (bucketsCover * CONFIG['ObjectsPerBucketPerThread'] * CONFIG['PutTimesForOneObj'] + j *
+                    dst_time = (buckets_cover * CONFIG['ObjectsPerBucketPerThread'] * CONFIG['PutTimesForOneObj'] + j *
                                CONFIG[
                                    'PutTimesForOneObj'] + (CONFIG['PutTimesForOneObj'] - put_times_for_one_obj)) * 1.0 / \
-                              CONFIG['TpsPerThread'] + startTime
-                    waitTime = dstTime - time.time()
-                    if waitTime > 0:  time.sleep(waitTime)
+                              CONFIG['TpsPerThread'] + start_time
+                    wait_time = dst_time - time.time()
+                    if wait_time > 0:
+                        time.sleep(wait_time)
                 if not fixed_size:
                     # change size every request for the same obj.
                     rest.contentLength, fixed_size = Util.generate_a_size(CONFIG['ObjectSize'])
@@ -2944,7 +3551,7 @@ def post_object(process_id, user, conn, result_queue):
                         open(obj_v_file, 'a').write(obj_v)
                         obj_v = ''
             j += 1
-        bucketsCover += 1
+        buckets_cover += 1
     if obj_v:
         open(obj_v_file, 'a').write(obj_v)
 
@@ -2976,7 +3583,8 @@ def start_process(process_id, user, test_case, results_queue, valid_start_time, 
         conn = obsPyCmd.MyHTTPConnection(host=CONFIG['OSCs'], is_secure=CONFIG['IsHTTPs'],
                                          ssl_version=CONFIG['sslVersion'], timeout=CONFIG['ConnectTimeout'],
                                          serial_no=process_id, long_connection=CONFIG['LongConnection'],
-                                         conn_header=CONFIG['ConnectionHeader'], anonymous=CONFIG['Anonymous'])
+                                         conn_header=CONFIG['ConnectionHeader'], anonymous=CONFIG['Anonymous'],
+                                         is_http2=CONFIG['IsHTTP2'])
     if test_case != 900:
         try:
             method_to_call = globals()[TESTCASES[test_case].split(';')[1]]
@@ -2985,7 +3593,8 @@ def start_process(process_id, user, test_case, results_queue, valid_start_time, 
         except KeyboardInterrupt:
             pass
         except Exception, e:
-            logging.error('Call method for test case %d except: %s' % (test_case, e))
+            import traceback
+            logging.error('Call method for test case %d except: %s' % (test_case, traceback.format_exc()))
     elif test_case == 900:
         test_cases = [int(case) for case in CONFIG['MixOperations'].split(',')]
         tmp = 0
@@ -3089,7 +3698,7 @@ def precondition():
             logging.info('import ssl module done, config ssl Version: %s' % CONFIG['sslVersion'])
         except ImportError:
             logging.warning('import ssl module error')
-            return False, 'Python version %s ,import ssl module error'
+            return False, 'Python version %s ,import ssl module error' % sys.version.split(' ')[0]
     oscs = CONFIG['OSCs'].split(',')
     for end_point in oscs:
         print 'Testing connection to %s\t' % end_point.ljust(20),
@@ -3097,11 +3706,12 @@ def precondition():
         test_conn = None
         try:
             test_conn = obsPyCmd.MyHTTPConnection(host=end_point, is_secure=CONFIG['IsHTTPs'],
-                                                  ssl_version=CONFIG['sslVersion'], timeout=60, serial_no=0)
+                                                  ssl_version=CONFIG['sslVersion'], timeout=60, serial_no=0,
+                                                  is_http2=CONFIG['IsHTTP2'])
             test_conn.create_connection()
             test_conn.connect_connection()
             ssl_ver = ''
-            if CONFIG['IsHTTPs']:
+            if CONFIG['IsHTTPs'] and not CONFIG['IsHTTP2']:
                 if Util.compare_version(sys.version.split()[0], '2.7.9') < 0:
                     ssl_ver = test_conn.connection.sock._sslobj.cipher()[1]
                 else:
@@ -3125,6 +3735,9 @@ def precondition():
     if not os.path.exists('data'):
         os.mkdir('data')
 
+    if not os.path.exists('position'):
+        os.mkdir('position')
+
     return True, 'check passed'
 
 
@@ -3142,7 +3755,7 @@ def get_objects_from_file(file_name):
                     continue
                 if line.split(',')[2][1:].find('/') == -1:
                     continue
-                if line.split(',')[11].strip().startswith('200 OK'):
+                if line.split(',')[11].strip().startswith('200'):
                     OBJECTS.append(line.split(',')[2][1:])
             fd.close()
         logging.warning('load file %s end, get objects [%d]' % (file_name, len(OBJECTS)))
@@ -3163,6 +3776,8 @@ USERS = []
 OBJECTS = []
 # initialize a shared memory file with fixed size: 1M
 SHARE_MEM = create_file_in_memory()
+
+APPEND_OBJECTS = {}
 
 LIST_INDEX = []
 
@@ -3208,6 +3823,8 @@ TESTCASES = {100: 'ListUserBuckets;list_user_buckets',
              205: 'DeleteMultiObjects;delete_multi_objects',
              206: 'CopyObject;copy_object',
              207: 'RestoreObject;restore_object',
+             208: 'AppendObject;append_object',
+             209: 'ImageProcess;image_process',
              211: 'InitMultiUpload;init_multi_upload',
              212: 'UploadPart;upload_part',
              213: 'CopyPart;copy_part',
@@ -3260,6 +3877,8 @@ def run_in_distributed_mode(mode):
     if not os.path.exists('result'):
         os.mkdir('result')
 
+    master_path = os.getcwd() + '/result/'
+
     # 初始化运行工具的版本的模式
     version = generate_run_header(mode)
 
@@ -3278,6 +3897,7 @@ def run_in_distributed_mode(mode):
     generate_distributed_mode_information(distribute_config['Master'], slaves)
 
     threads = []
+
     for connect in connects:
         t = threading.Thread(target=Util.start_tool, args=(connect, CONFIG['Testcase'],
                                                            int(distribute_config['RunTime']),))
@@ -3290,6 +3910,12 @@ def run_in_distributed_mode(mode):
 
     for thread in threads:
         thread.join()
+
+    time.sleep(int(distribute_config['RunTime']) + 10)
+
+    print "Close old connections"
+    for connect in connects:
+        connect.close()
 
     print "Start to collect data from slaves..."
 
@@ -3307,8 +3933,14 @@ def run_in_distributed_mode(mode):
     report_writer.write('\n*****************Result****************\n')
 
     # start collecting brief data
-    logging.debug("start to collect data from slave servers")
-    for connect in connects:
+    logging.warn("start to collect data from slave servers")
+    logging.warn("build new connections")
+    new_connects = Util.generate_connections(slaves)
+    for connect in new_connects:
+        slave_brief_file_name = Util.get_brief_file_name(connect)
+        copy_slave_brief_to_master_cmd = r"scp `ls -t result/*_brief.txt | head -1` root@%s:%s%s" % (distribute_config['Master'], master_path, slave_brief_file_name + '[' + connect.ip + ']')
+        connect.execute_cmd(copy_slave_brief_to_master_cmd, expect_end="password", timeout=10)
+        connect.execute_cmd(connect.password, timeout=10)
         tps = connect.execute_cmd(r"grep '\[TPS\]' `ls -t result/*_brief.txt | head -1` | awk '{print $2}'")
         avg_latency = connect.execute_cmd(
             r"grep '\[AvgLatency\]' `ls -t result/*_brief.txt | head -1` | awk '{print $2}'")
@@ -3371,6 +4003,44 @@ def run_in_distributed_mode(mode):
     print "\nwaiting to exit..."
     time.sleep(2)
     print version
+
+
+def check_connection(server, file_name):
+    """
+    
+    :param server: 
+    :param file_name: 
+    :return: 
+    """
+    while True:
+        start_time = int(round(time.time() * 1000))
+        command = r"curl --connect-timeout 8 -m 30 http://%s:5080 -v " % server + " > /dev/null 2>&1; echo $?"
+        result = commands.getstatusoutput(command)
+        end_time = int(round(time.time() * 1000))
+        used_time = end_time - start_time
+        if result[0] != 0:
+            line = str(result[0]) + ',' + str(start_time) + ',' + str(end_time) + ',' + str(used_time)
+            os.system(r"echo '%s' >> %s 2>&1" % (line, file_name))
+            time.sleep(1)
+
+
+def run_connection_checker():
+    """
+    
+    :return: 
+    """
+    logging.warn("start to curl...")
+    oscs = CONFIG['OSCs'].split(',')
+
+    thread_list = []
+    for server in oscs:
+        file_name = time.strftime('result/%Y.%m.%d_%H.%M.%S', time.localtime()) + '_' + TESTCASES[CONFIG['Testcase']].split(';')[0].split(';')[0] + '_' + str(int(CONFIG['Users']) * int(CONFIG['ThreadsPerUser'])) + '_curl_' + server + '.txt'
+        t = threading.Thread(target=check_connection, args=(server, file_name, ))
+        t.daemon = True
+        thread_list.append(t)
+
+    for t in thread_list:
+        t.start()
 
 
 def run_in_integrated_mode(mode):
@@ -3471,17 +4141,29 @@ def run_in_integrated_mode(mode):
     os.system('renice -19 -p ' + str(results_writer.pid) + ' >/dev/null 2>&1')
     time.sleep(.2)
 
+    if CONFIG['TestNetwork']:
+        run_connection_checker()
+
     # 顺序启动多个业务进程
     process_list = []
     # 多进程公用锁
     lock = multiprocessing.Lock()
     esc = chr(27)  # escape key
     i = 0
+    conn = None
+    if CONFIG['IsHTTP2'] and CONFIG['IsShareConnection']:
+        # http2 可以复用链接发送多个请求，此时conn共用
+        conn = obsPyCmd.MyHTTPConnection(host=CONFIG['OSCs'], is_secure=CONFIG['IsHTTPs'],
+                                         ssl_version=CONFIG['sslVersion'], timeout=CONFIG['ConnectTimeout'],
+                                         long_connection=CONFIG['LongConnection'],
+                                         conn_header=CONFIG['ConnectionHeader'], anonymous=CONFIG['Anonymous'],
+                                         is_http2=CONFIG['IsHTTP2'])
+
     while i < CONFIG['Threads']:
         p = multiprocessing.Process(target=start_process, args=(
             i, USERS[i / CONFIG['ThreadsPerUser']], CONFIG['Testcase'], results_queue, valid_start_time, valid_end_time,
             current_threads,
-            lock, None,
+            lock, conn,
             False))
         i += 1
         p.daemon = True
@@ -3513,6 +4195,10 @@ def run_in_integrated_mode(mode):
                     tmpi += 1
                     break
 
+        print "\033[1;32;40mWorkers exited.\033[0m Waiting curl checker exit...",
+        os.system(r"kill \-9 `pgrep curl`")
+        print "\033[1;32;40m[WARN] Terminated\033[0m\n"
+
         print "\033[1;32;40mWorkers exited.\033[0m Waiting results_writer exit...",
         sys.stdout.flush()
         while results_writer.is_alive():
@@ -3520,9 +4206,11 @@ def run_in_integrated_mode(mode):
             tmpi += 1
             if tmpi > 1000:
                 logging.warn('retry too many times, shutdown results_writer using terminate()')
+                results_writer.generate_write_final_result()
                 results_writer.terminate()
             time.sleep(.01)
         print "\n\033[1;33;40m[WARN] Terminated\033[0m\n"
+
         print version
         sys.exit()
 
@@ -3537,7 +4225,8 @@ def run_in_integrated_mode(mode):
     while not stop_mark:
         time.sleep(.3)
         if CONFIG['RunSeconds'] and (time.time() - valid_start_time.value >= CONFIG['RunSeconds']):
-            logging.warning('time is up, exit')
+            logging.warn('time is up, exit')
+            results_writer.generate_write_final_result()
             exit_force(99, None)
         for j in process_list:
             if j.is_alive():
@@ -3547,6 +4236,10 @@ def run_in_integrated_mode(mode):
         j.join()
     # 等待结果进程退出。
     logging.info('Waiting results_writer to exit...')
+    print "\033[1;32;40mWorkers exited.\033[0m Waiting curl checker exit...",
+    os.system(r"kill \-9 `pgrep curl`")
+
+    print "\033[1;32;40m[WARN] Terminated\033[0m\n"
     while results_writer.is_alive():
         current_threads.value = -1  # inform results_writer
         time.sleep(.3)
@@ -3570,9 +4263,17 @@ if __name__ == '__main__':
     # 如果携带参数，则使用参数，覆盖配置文件。
     if len(sys.argv[1:]) > 0:
         CONFIG['Testcase'] = int(sys.argv[1:][0])
+
+    if CONFIG['Testcase'] == 209 or (CONFIG['Testcase'] == 900 and '209' in CONFIG['MixOperations']):
+        generate_image_process_parameters()
+
     if len(sys.argv[1:]) > 1:
         CONFIG['Users'] = int(sys.argv[1:][1])
         CONFIG['Threads'] = CONFIG['Users'] * CONFIG['ThreadsPerUser']
+
+    # 如果是追加写请求208，需要提前加载对象Position
+    if CONFIG['Testcase'] == 208:
+        APPEND_OBJECTS = generate_append_object_position()
 
     # 将对象编号写入列表
     if is_needed_to_build_list_index():

@@ -29,12 +29,23 @@ class HmacAuthV2Handler:
 
     def handle(self):
         self.obsRequest.headers['x-amz-date'] = time.strftime(Util.TIME_FORMAT, time.gmtime())
+
         if self.obsRequest.ak == '' or self.obsRequest.sk == '':
             logging.debug('ak [%s], sk [%s], return' % (self.obsRequest.ak, self.obsRequest.sk))
             return
-        self.obsRequest.headers['Authorization'] = "AWS %s:%s" % (
-        self.obsRequest.ak, self.encode(self.obsRequest.sk, self.__canonical_string__()))
+        self.obsRequest.headers['Authorization'] = "AWS %s:%s" % (self.obsRequest.ak, self.encode(self.obsRequest.sk, self.__canonical_string__()))
+
         logging.debug('Authorization: [%s]' % (self.obsRequest.headers['Authorization']))
+
+        if self.obsRequest.is_cdn:
+            if self.obsRequest.cdn_ak == '' or self.obsRequest.cdn_sk == '':
+                logging.debug('cdn ak [%s], cdn sk [%s], return' % (self.obsRequest.cdn_ak, self.obsRequest.cdn_sk))
+                return
+            self.obsRequest.headers['CloudService'] = "AWS %s:%s" % (self.obsRequest.cdn_ak, self.encode(self.obsRequest.cdn_sk, self.__canonical_string__()))
+            self.obsRequest.headesr['CloudServiceSecurityToken'] = self.obsRequest.cdn_sts_token
+
+            logging.debug('Cdn CloudService: [%s]' % (self.obsRequest.headers['CloudService']))
+            logging.debug('Cdn CloudServiceSecurityToken: [%s]' % (self.obsRequest.headers['CloudServiceSecurityToken']))
 
     def encode(self, aws_secret_access_key, encodestr, urlencode=False):
         b64_hmac = base64.encodestring(hmac.new(aws_secret_access_key, encodestr, hashlib.sha1).digest()).strip()
@@ -78,9 +89,8 @@ class HmacAuthV2Handler:
         # 添加queryArgs到c_string, value不需要编码
         interesting_querys = (
         'acl', 'lifecycle', 'location', 'logging', 'notification', 'partNumber', 'policy', 'requestPayment',
-        'versioning' \
-        'torrent', 'uploadId', 'uploads', 'versionId', 'versioning', 'versions', 'website', 'delete', 'deletebucket',
-        'cors', 'restore')
+        'versioning', 'torrent', 'uploadId', 'uploads', 'versionId', 'versioning', 'versions', 'website', 'delete',
+        'deletebucket', 'cors', 'restore', 'append', 'position', 'x-image-process')
         c_string += '?'
         for arg in sorted(self.obsRequest.queryArgs):
             if arg not in interesting_querys:

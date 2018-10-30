@@ -1,5 +1,6 @@
 # -*- coding:utf-8 -*-
-from random import Random
+import random
+import string
 import base64
 import hmac
 import hashlib
@@ -24,17 +25,25 @@ class InitSSHRemoteHost:
 
 
 def random_string_create(string_length):
-    random_string = ''
-    chars_all = 'AaBbCcDdEeFfGgHhIiJjKkLlMmNnOoPpQqRrSsTtUuVvWwXxYyZz0123456789'
-    random = Random()
     if isinstance(string_length, int):
-        i = 0
-        while i < string_length:
-            random_string += chars_all[random.randint(0, int(len(chars_all) - 1))]
-            i = i + 1
-        return random_string
+        return ''.join(
+            [random.choice(string.ascii_letters + string.digits + string.punctuation.translate(None, '!,%&<>\'\\^`')) for n in
+             range(string_length)])
     else:
         print 'input error'
+
+
+def generate_image_format(image_format):
+    """
+    生成图片转码格式
+    :param image_format: 
+    :return: 
+    """
+    if str(image_format).find(',') != -1:
+        format_array = image_format.split(',')
+        return format_array[random.randint(0, len(format_array) - 1)]
+
+    return image_format
 
 
 def generate_a_size(data_size_str):
@@ -43,8 +52,13 @@ def generate_a_size(data_size_str):
     :param data_size_str: 
     :return: 
     """
-    random = Random()
-    if str(data_size_str).find('~') != -1:
+    if str(data_size_str).find('~') != -1 and str(data_size_str).find(',') != -1:
+        size_array = data_size_str.split(',')
+        size_chosen = size_array[random.randint(0, len(size_array) - 1)]
+        start_size = int(size_chosen.split('~')[0])
+        end_size = int(size_chosen.split('~')[1])
+        return random.randint(start_size, end_size), False
+    elif str(data_size_str).find('~') != -1:
         start_size = int(data_size_str.split('~')[0])
         end_size = int(data_size_str.split('~')[1])
         return random.randint(start_size, end_size), False
@@ -122,12 +136,12 @@ def read_distribute_config(config_file='distribute_config.dat'):
     config['ToolNumberPerServer'] = config['ToolNumberPerServer'].replace(' ', '').replace(',,', ',')
 
     if config['Master'] is not None and config['Master'] and \
-       config['Slaves'] is not None and config['Slaves'] and \
-       config['Usernames'] is not None and config['Usernames'] and \
-       config['Passwords'] is not None and config['Passwords'] and \
-       config['Toolpaths'] is not None and config['Toolpaths'] and \
-       config['ToolNumberPerServer'] is not None and config['ToolNumberPerServer'] and \
-       config['RunTime'] is not None and config['RunTime']:
+                    config['Slaves'] is not None and config['Slaves'] and \
+                    config['Usernames'] is not None and config['Usernames'] and \
+                    config['Passwords'] is not None and config['Passwords'] and \
+                    config['Toolpaths'] is not None and config['Toolpaths'] and \
+                    config['ToolNumberPerServer'] is not None and config['ToolNumberPerServer'] and \
+                    config['RunTime'] is not None and config['RunTime']:
         pass
     else:
         raise Exception('Some config(s) is missed')
@@ -163,7 +177,6 @@ def generate_slave_servers(config):
 
 
 def generate_connections(servers):
-
     """
     generate provided servers' connections
     :param servers: 
@@ -177,7 +190,7 @@ def generate_connections(servers):
 
         # build the connection to provided server
         logging.debug("Build connection to server[%s]" % server.localIP)
-        r = connect.execute_cmd('ssh %s@%s' % (server.username, server.localIP), timeout=2)
+        r = connect.execute_cmd('ssh %s@%s' % (server.username, server.localIP), timeout=10)
         if r.endswith('?'):
             connect.execute_cmd('yes', expect_end=':')
         connect.execute_cmd(server.password, expect_end='#')
@@ -185,26 +198,37 @@ def generate_connections(servers):
 
         # go to provided tool path
         logging.debug("Go to provided tool path[%s] of server[%s]" % (server.tools_path, server.localIP))
-        connect.execute_cmd('cd %s' % server.tools_path, timeout=2)
+        connect.execute_cmd('cd %s' % server.tools_path, timeout=5)
 
         connects.append(connect)
 
     return connects
 
 
+def get_brief_file_name(connect):
+    """
+    get brief file name
+    :param connect: 
+    :return: 
+    """
+    logging.warn("try to get brief file from server: %s" % connect.ip)
+    get_slave_brief_file_name_result = connect.execute_cmd(r"ls -t result/*_brief.txt | head -1")
+    tmp = get_slave_brief_file_name_result.split('\r\n')[0]
+
+    return tmp.split('/')[1]
+
+
 def start_tool(connect, test_case, run_time):
     """
     start tool in server
-    :param connect: 
+    :param connect:
     :param test_case:
     :param run_time:
-    :return: 
+    :return:
     """
     print "Start at %s, send run signal to slave[%s]" % (time.strftime('%X %x %Z'), connect.ip)
     logging.warn("send run signal to server %s" % connect.ip)
-    connect.execute_cmd('python run.py %s' % test_case, timeout=5)
-    time.sleep(int(run_time))
-    connect.execute_cmd('\x03')
+    connect.execute_cmd('python run.py %s' % test_case, timeout=10)
 
 
 def convert_time_format_str(time_sec):
@@ -254,4 +278,3 @@ def convert_to_size_str(size_bt):
         return "%.2f KB" % (size_bt / (kb * 1.0))
     else:
         return "%.2f B" % size_bt
-

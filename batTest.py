@@ -46,7 +46,7 @@ def modifyFile(file, item, value):
         open(file, 'wb').write('\n'.join(newLines))
     else: print 'can not find item %s in file %s' %(item, value)
     
-runSeq = [101, 103, 141, 142, 151, 152, 201, 202, 203, 206, 205, 211, 212, 213, 214, 204, 153, 143, 105, 101, 104, 900]
+runSeq = [101, 103, 141, 142, 151, 152, 201, 202, 203, 206, 205, 208, 211, 212, 213, 214, 204, 153, 143, 105, 101, 104, 900]
 
 #bak config.dat
 configBak = 'config.dat.%d' %int(time.time())
