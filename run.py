@@ -226,7 +226,7 @@ def read_config(config_file='config.dat'):
         if CONFIG['IsDataFromFile'] and CONFIG['CalHashMD5']:
             raise Exception('IsDataFromFile and CalHashMD5 can not be true at the same time.')
 
-        if CONFIG['IsHttp2']:
+        if CONFIG['IsHTTP2']:
             print '[Attention] currently, http2 is not stable in this test tool, make sure you have already set CalHashMD5 = false'
 
     except Exception, e:
